@@ -1,0 +1,605 @@
+'use strict';
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const C=window.K9_CONFIG||{};
+const DEFAULT_SETTINGS={id:1,organization_name:C.ORGANIZATION_NAME||'K9 Napoletano Academy',app_name:C.APP_NAME||'K9 Studio Dogsitter',subtitle:'',description:'',address:'',postal_code:'',city:'',province:'',country:'Italia',phone:'',mobile:'',email:'',website:'',vat_number:'',fiscal_code:'',iban:'',social_text:'',footer_text:'',legal_text:'',primary_color:'#0f5f53',secondary_color:'#153e75',header_color:'#ffffff',card_color:'#ffffff',button_color:'#0f5f53',logo_url:'',logo_size:48,logo_position:'sinistra',show_logo_pdf:true,show_header_pdf:true,show_footer_pdf:true,show_fiscal_data_pdf:true,show_qr_pdf:false,show_photos_pdf:false,show_signatures_pdf:false};
+const state={session:null,profile:null,customers:[],dogs:[],profiles:[],services:[],quotes:[],documents:[],trash:[],settings:{...DEFAULT_SETTINGS}};
+const roleLabels={owner:'Datore di lavoro',vice_admin:'Vice amministratore',dipendente:'Dipendente'};
+const statusLabels={programmato:'Programmato',in_corso:'In corso',da_verificare:'Da verificare',chiuso:'Chiuso',annullato:'Annullato'};
+const esc=v=>String(v??'').replace(/[&<>'"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[m]));
+const money=n=>new Intl.NumberFormat('it-IT',{style:'currency',currency:'EUR'}).format(Number(n||0));
+const dateIT=v=>v?new Date(v+'T12:00:00').toLocaleDateString('it-IT'):'—';
+const localDate=(d=new Date())=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const parseLocalDate=value=>{const match=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value||''));if(!match)return null;const date=new Date(Number(match[1]),Number(match[2])-1,Number(match[3]),12,0,0,0);return Number.isNaN(date.getTime())?null:date};
+const addDays=(value,days)=>{const date=parseLocalDate(value);if(!date)throw Error('Data non valida.');date.setDate(date.getDate()+Number(days||0));return localDate(date)};
+const daysBetween=(from,to)=>{const start=parseLocalDate(from),end=parseLocalDate(to);if(!start||!end)return null;return Math.round((end-start)/86400000)};
+const quoteValidityValue=(quoteDate,validUntil)=>{const days=daysBetween(quoteDate,validUntil);return [7,15,30,60,90].includes(days)?String(days):'custom'};
+const toast=m=>{const e=$('#toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2600)};
+const isAdmin=()=>['owner','vice_admin'].includes(state.profile?.role), isOwner=()=>state.profile?.role==='owner', isEmployee=()=>state.profile?.role==='dipendente';
+function configured(){return /^https:\/\/.+\.supabase\.co$/.test(C.SUPABASE_URL||'')&&!String(C.SUPABASE_ANON_KEY||'').startsWith('INCOLLA_')}
+function authHeaders(extra={}){return {'apikey':C.SUPABASE_ANON_KEY,'Authorization':`Bearer ${state.session?.access_token||C.SUPABASE_ANON_KEY}`,'Content-Type':'application/json',...extra}}
+async function refreshSession(){if(!state.session?.refresh_token)throw Error('Sessione scaduta.');const r=await fetch(`${C.SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`,{method:'POST',headers:{apikey:C.SUPABASE_ANON_KEY,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:state.session.refresh_token})});const d=await r.json();if(!r.ok)throw Error(d.error_description||d.msg||'Sessione scaduta.');state.session=d;localStorage.setItem('k9_session',JSON.stringify(d));return d}
+async function request(path,opt={},retry=true){if(!configured())throw Error('Configura config.js prima della pubblicazione.');let r=await fetch(C.SUPABASE_URL+path,{...opt,headers:{...authHeaders(),...(opt.headers||{})}});if(r.status===401&&retry&&state.session?.refresh_token){await refreshSession();return request(path,opt,false)}const text=await r.text();let data=null;try{data=text?JSON.parse(text):null}catch{data=text}if(!r.ok)throw Error(data?.message||data?.error_description||data?.hint||text||`Errore ${r.status}`);return data}
+async function currentAuthUser(){if(!state.session?.access_token)throw Error('Sessione non disponibile. Accedi nuovamente.');if(Date.now()/1000>(state.session.expires_at||0)-60)await refreshSession();const r=await fetch(`${C.SUPABASE_URL}/auth/v1/user`,{headers:{apikey:C.SUPABASE_ANON_KEY,Authorization:`Bearer ${state.session.access_token}`}});const d=await r.json();if(!r.ok||!d?.id)throw Error(d?.message||d?.msg||'Sessione utente non valida.');if(state.profile?.id&&d.id!==state.profile.id)throw Error('Sessione non coerente con il profilo aperto. Esci e accedi nuovamente.');return d}
+async function invokeHyperHandler(body,retry=true){await currentAuthUser();const requestId=(crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`);const r=await fetch(`${C.SUPABASE_URL}/functions/v1/hyper-handler`,{method:'POST',headers:{apikey:C.SUPABASE_ANON_KEY,Authorization:`Bearer ${state.session.access_token}`,'Content-Type':'application/json','X-Request-Id':requestId},body:JSON.stringify(body)});if(r.status===401&&retry&&state.session?.refresh_token){await refreshSession();return invokeHyperHandler(body,false)}const text=await r.text();let data;try{data=text?JSON.parse(text):{}}catch{data={message:text}}if(!r.ok)throw Error(data?.message||`Errore funzione ${r.status} · richiesta ${requestId}`);return data}
+window.previewProfilePhoto=event=>{const file=event.target.files?.[0];if(!file)return;const allowed=['image/jpeg','image/png','image/webp'];if(!allowed.includes(file.type)){event.target.value='';return toast('Formato foto non supportato. Usa JPG, PNG o WEBP.')}if(file.size>5*1024*1024){event.target.value='';return toast('La foto supera il limite di 5 MB.')}const reader=new FileReader();reader.onload=()=>{const img=$('#profilePhotoPreview');if(img)img.src=String(reader.result)};reader.readAsDataURL(file)};
+async function uploadProfilePhoto(userId,file){const allowed=['image/jpeg','image/png','image/webp'];if(!allowed.includes(file.type))throw Error('Formato foto non supportato.');if(file.size>5*1024*1024)throw Error('La foto supera il limite di 5 MB.');await currentAuthUser();const ext=file.type==='image/png'?'png':file.type==='image/webp'?'webp':'jpg';const path=`${userId}/pass-${Date.now()}.${ext}`;const r=await fetch(`${C.SUPABASE_URL}/storage/v1/object/profile-photos/${path}`,{method:'POST',headers:{apikey:C.SUPABASE_ANON_KEY,Authorization:`Bearer ${state.session.access_token}`,'Content-Type':file.type,'x-upsert':'true'},body:file});const text=await r.text();if(!r.ok)throw Error((()=>{try{return JSON.parse(text).message}catch{return text}})()||'Caricamento foto non riuscito');return `${C.SUPABASE_URL}/storage/v1/object/public/profile-photos/${path}`}
+const select=(table,q='select=*')=>request(`/rest/v1/${table}?${q}`);
+const insert=(table,data)=>request(`/rest/v1/${table}`,{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify(data)});
+const update=(table,id,data)=>request(`/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(data)});
+const rpc=(name,body={})=>request(`/rest/v1/rpc/${name}`,{method:'POST',body:JSON.stringify(body)});
+async function login(email,password){const r=await fetch(`${C.SUPABASE_URL}/auth/v1/token?grant_type=password`,{method:'POST',headers:{apikey:C.SUPABASE_ANON_KEY,'Content-Type':'application/json'},body:JSON.stringify({email,password})});const d=await r.json();if(!r.ok)throw Error(d.error_description||d.msg||'Accesso non riuscito');state.session=d;localStorage.setItem('k9_session',JSON.stringify(d));await bootstrap()}
+async function logout(){try{await request('/auth/v1/logout',{method:'POST'})}catch{}localStorage.removeItem('k9_session');location.reload()}
+async function restore(){try{state.session=JSON.parse(localStorage.getItem('k9_session')||'null')}catch{}if(!state.session)return false;try{if(Date.now()/1000>(state.session.expires_at||0)-60)await refreshSession();await bootstrap();return true}catch(e){localStorage.removeItem('k9_session');return false}}
+async function bootstrap(){const p=await select('profiles',`select=*&id=eq.${state.session.user.id}&limit=1`);state.profile=p[0];if(!state.profile||!state.profile.active)throw Error('Account non attivo.');await loadSettings();applyIdentity();$('#auth').classList.add('hidden');$('#app').classList.remove('hidden');$('#roleLabel').textContent=`${state.profile.full_name||state.profile.email} · ${roleLabels[state.profile.role]||state.profile.role}`;buildNav();await loadAll();show('dashboard')}
+function buildNav(){const a=[['dashboard','Dashboard'],['customers','Clienti'],['dogs','Cani'],['employees','Utenti'],['services','Servizi'],['quotes','Preventivi'],['payments','Economia'],['documents','Documenti'],['audit','Log'],['trash','Cestino'],['profile','Pass'],['settings','Impostazioni']];const e=[['dashboard','Oggi'],['customers','Clienti assegnati'],['dogs','Cani assegnati'],['services','I miei servizi'],['compensation','Compensi'],['profile','Il mio pass']];$('#nav').innerHTML=(isAdmin()?a:e).map(([id,l])=>`<button data-screen="${id}">${l}</button>`).join('')}
+async function loadDocuments(){
+  let serviceDocs=[];let quoteDocs=[];
+  try{serviceDocs=await select('dogsitter_document_versions','select=*&order=created_at.desc')}catch(e){console.warn('Archivio servizi versionato non ancora installato:',e.message);try{serviceDocs=await select('dogsitter_documents','select=*&order=created_at.desc')}catch{serviceDocs=[]}}
+  try{quoteDocs=(await select('dogsitter_quote_document_versions','select=*&order=created_at.desc')).map(d=>({...d,source_kind:'quote',document_type:'quote'}))}catch(e){console.warn('Archivio preventivi non ancora installato:',e.message)}
+  return [...quoteDocs,...serviceDocs];
+}
+async function loadQuotes(){try{return await select('dogsitter_quotes','select=*,quote_items:dogsitter_quote_items(*)&deleted_at=is.null&order=created_at.desc')}catch(e){console.warn('Modulo preventivi non ancora installato:',e.message);return []}}
+async function loadAll(){if(isAdmin()){[state.customers,state.dogs,state.profiles,state.services,state.quotes,state.documents]=await Promise.all([select('customers','select=*&deleted_at=is.null&order=last_name.asc,first_name.asc'),select('dogs','select=*&deleted_at=is.null&order=name.asc'),select('profiles','select=*&order=full_name.asc'),select('dogsitter_services','select=*&deleted_at=is.null&order=service_date.desc,service_time.asc'),loadQuotes(),loadDocuments()])}else{const d=await rpc('employee_workspace');state.customers=d.customers||[];state.dogs=d.dogs||[];state.services=d.services||[];state.quotes=[];state.documents=[];state.profiles=[]}}
+function show(id){$$('.screen').forEach(e=>e.classList.add('hidden'));$('#'+id).classList.remove('hidden');$$('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.screen===id));render(id)}
+function render(id){({dashboard:renderDashboard,customers:renderCustomers,dogs:renderDogs,employees:renderEmployees,services:renderServices,quotes:renderQuotes,compensation:renderComp,payments:renderPayments,documents:renderDocs,audit:renderAudit,trash:renderTrash,profile:renderPass,settings:renderSettings}[id]||(()=>{}))()}
+const cname=id=>{const c=state.customers.find(x=>x.id===id);return c?`${c.first_name} ${c.last_name}`:'—'}, dname=id=>state.dogs.find(x=>x.id===id)?.name||'—', pname=id=>state.profiles.find(x=>x.id===id)?.full_name||'—';
+const firstValue=(obj,...keys)=>{for(const key of keys){const value=obj?.[key];if(value!==undefined&&value!==null&&String(value).trim()!=='')return value}return ''};
+const joinedValues=(obj,keys,separator=' · ')=>keys.map(key=>firstValue(obj,key)).filter(value=>String(value).trim()!=='').join(separator);
+const displayValue=(value,fallback='Non indicato')=>String(value??'').trim()||fallback;
+const servicePeriod=s=>{const start=s.service_date||s.start_date,end=s.end_date||start;return start?(end&&end!==start?`${dateIT(start)} – ${dateIT(end)}`:dateIT(start)):'—'};
+const serviceSlots=s=>[s.time_slot_1,s.time_slot_2,s.time_slot_3,s.time_slot_4].filter(Boolean).join(' · ')||([String(s.service_time||'').slice(0,5),plannedEndTime(s)].filter(v=>v&&v!=='—').join('–')||'Non indicate');
+const totalVisits=s=>Math.max(1,Number(s.daily_visits||1))*daysInclusive(s.service_date||s.start_date,s.end_date||s.service_date||s.start_date);
+const matured=s=>['da_verificare','chiuso'].includes(s.status);
+async function loadSettings(){try{const rows=await select('app_settings','select=*&id=eq.1&limit=1');state.settings={...DEFAULT_SETTINGS,...(rows[0]||{})}}catch(e){state.settings={...DEFAULT_SETTINGS};console.warn('Impostazioni non ancora installate:',e.message)}}
+function identityLogo(){return state.settings.logo_url||'assets/logo.png'}
+function applyIdentity(){const x=state.settings||DEFAULT_SETTINGS;document.documentElement.style.setProperty('--p',x.primary_color||DEFAULT_SETTINGS.primary_color);document.documentElement.style.setProperty('--p2',x.secondary_color||DEFAULT_SETTINGS.secondary_color);document.documentElement.style.setProperty('--header',x.header_color||'#ffffff');document.documentElement.style.setProperty('--card',x.card_color||'#ffffff');document.documentElement.style.setProperty('--button',x.button_color||x.primary_color||DEFAULT_SETTINGS.button_color);document.title=x.app_name||DEFAULT_SETTINGS.app_name;const logo=identityLogo();const appLogo=$('#appLogo');if(appLogo){appLogo.src=logo;appLogo.style.width=`${Number(x.logo_size||48)}px`;appLogo.style.height=`${Number(x.logo_size||48)}px`}const loginLogo=$('.auth-card .logo');if(loginLogo)loginLogo.src=logo;const brand=$('#appBrandName');if(brand)brand.textContent=x.app_name||DEFAULT_SETTINGS.app_name;const b=$('.brand');if(b){b.style.flexDirection=x.logo_position==='centro'?'column':'row';b.style.textAlign=x.logo_position==='centro'?'center':'left';b.style.marginLeft=x.logo_position==='destra'?'auto':''}}
+function settingField(name,label,type='text',wide=false){const v=state.settings[name]??'';return `<label class="${wide?'wide':''}">${label}<input name="${name}" type="${type}" value="${esc(v)}"></label>`}
+function settingArea(name,label){return `<label class="wide">${label}<textarea name="${name}">${esc(state.settings[name]||'')}</textarea></label>`}
+function checkField(name,label){return `<label class="check-row"><input name="${name}" type="checkbox" ${state.settings[name]?'checked':''}><span>${label}</span></label>`}
+function renderSettings(){if(!isAdmin()){show('dashboard');return}const s=state.settings;$('#settingsPanel').innerHTML=`<form id="identityForm"><section class="settings-block"><h3>Logo</h3><div class="logo-preview"><img id="settingsLogoPreview" src="${esc(identityLogo())}" alt="Logo attivo"><div><label>Carica nuovo logo<input id="identityLogoFile" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml"></label><p class="muted">Il logo attuale resta quello predefinito finché non ne carichi uno nuovo.</p><button type="button" id="restoreDefaultLogo">Ripristina logo predefinito</button></div></div><div class="settings-grid">${settingField('logo_size','Dimensione logo (28-160 px)','number')}<label>Posizione logo<select name="logo_position"><option value="sinistra" ${s.logo_position==='sinistra'?'selected':''}>Sinistra</option><option value="centro" ${s.logo_position==='centro'?'selected':''}>Centro</option><option value="destra" ${s.logo_position==='destra'?'selected':''}>Destra</option></select></label></div></section><section class="settings-block"><h3>Intestazione</h3><div class="settings-grid">${settingField('organization_name','Nome attività')}${settingField('app_name','Nome applicazione')}${settingField('subtitle','Sottotitolo', 'text', true)}${settingArea('description','Descrizione')}${settingField('address','Indirizzo')}${settingField('postal_code','CAP')}${settingField('city','Comune')}${settingField('province','Provincia')}${settingField('country','Nazione')}${settingField('phone','Telefono')}${settingField('mobile','Cellulare')}${settingField('email','Email','email')}${settingField('website','Sito web')}${settingField('vat_number','Partita IVA')}${settingField('fiscal_code','Codice fiscale')}${settingField('iban','IBAN', 'text', true)}${settingArea('social_text','Social e altri riferimenti')}</div></section><section class="settings-block"><h3>Grafica</h3><div class="settings-grid">${settingField('primary_color','Colore principale','color')}${settingField('secondary_color','Colore secondario','color')}${settingField('header_color','Colore intestazione','color')}${settingField('card_color','Colore schede','color')}${settingField('button_color','Colore pulsanti','color')}</div></section><section class="settings-block"><h3>PDF e piè di pagina</h3><div class="settings-grid">${settingArea('footer_text','Testo piè di pagina')}${settingArea('legal_text','Note legali / privacy')}${checkField('show_logo_pdf','Mostra logo nel PDF')}${checkField('show_header_pdf','Mostra intestazione nel PDF')}${checkField('show_footer_pdf','Mostra piè di pagina nel PDF')}${checkField('show_fiscal_data_pdf','Mostra dati fiscali nel PDF')}${checkField('show_qr_pdf','Mostra QR identificativo nel PDF')}${checkField('show_photos_pdf','Mostra fotografie nel PDF')}${checkField('show_signatures_pdf','Mostra firme nel PDF')}</div></section><div class="settings-actions"><button class="primary" type="submit">Salva impostazioni</button><button type="button" id="resetIdentity">Ripristina tutti i valori iniziali</button></div></form>`;$('#identityForm').onsubmit=saveSettings;$('#identityLogoFile').onchange=previewAndUploadLogo;$('#restoreDefaultLogo').onclick=()=>setLogoUrl('');$('#resetIdentity').onclick=resetSettings}
+async function saveSettings(e){e.preventDefault();const f=new FormData(e.currentTarget),data={};for(const [k,v] of f.entries())data[k]=v;['show_logo_pdf','show_header_pdf','show_footer_pdf','show_fiscal_data_pdf','show_qr_pdf','show_photos_pdf','show_signatures_pdf'].forEach(k=>data[k]=f.has(k));data.logo_size=Math.max(28,Math.min(160,Number(data.logo_size||48)));await request('/rest/v1/app_settings?id=eq.1',{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(data)});state.settings={...state.settings,...data};applyIdentity();toast('Impostazioni salvate')}
+async function previewAndUploadLogo(e){const file=e.target.files?.[0];if(!file)return;if(file.size>5*1024*1024){toast('Il logo supera 5 MB');e.target.value='';return}const ext=(file.name.split('.').pop()||'png').toLowerCase();const path=`identity/logo-${Date.now()}.${ext}`;const r=await fetch(`${C.SUPABASE_URL}/storage/v1/object/app-assets/${path}`,{method:'POST',headers:{apikey:C.SUPABASE_ANON_KEY,Authorization:`Bearer ${state.session.access_token}`,'Content-Type':file.type||'application/octet-stream','x-upsert':'true'},body:file});const t=await r.text();if(!r.ok)throw Error(t||'Caricamento logo non riuscito');const url=`${C.SUPABASE_URL}/storage/v1/object/public/app-assets/${path}`;await setLogoUrl(url)}
+async function setLogoUrl(url){await request('/rest/v1/app_settings?id=eq.1',{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({logo_url:url})});state.settings.logo_url=url;applyIdentity();const p=$('#settingsLogoPreview');if(p)p.src=identityLogo();toast(url?'Logo aggiornato':'Logo predefinito ripristinato')}
+async function resetSettings(){if(!confirm('Ripristinare intestazione, colori e logo ai valori iniziali?'))return;const data={...DEFAULT_SETTINGS};delete data.id;await request('/rest/v1/app_settings?id=eq.1',{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(data)});state.settings={...DEFAULT_SETTINGS};applyIdentity();renderSettings();toast('Impostazioni ripristinate')}
+
+function renderDashboard(){
+  const today=localDate(), todays=state.services.filter(s=>s.service_date===today), upcoming=state.services.filter(s=>s.service_date>=today&&s.status!=='annullato').sort((a,b)=>String(a.service_date+a.service_time).localeCompare(String(b.service_date+b.service_time))).slice(0,4);
+  if(isAdmin()){
+    const toVerify=state.services.filter(s=>s.status==='da_verificare').length;
+    const toCollect=state.services.filter(s=>s.customer_payment_status==='da_incassare'&&matured(s)).reduce((a,s)=>a+Number(s.customer_amount||0),0);
+    const toPay=state.services.filter(s=>s.employee_payment_status==='da_liquidare'&&matured(s)).reduce((a,s)=>a+Number(s.employee_compensation||0),0);
+    $('#dashboard').innerHTML=`<div class="page-title"><div><span class="eyebrow">PANORAMICA OPERATIVA</span><h2>Dashboard amministrativa</h2><p class="muted">Situazione aggiornata dell’attività.</p></div><span class="today-chip">${new Date().toLocaleDateString('it-IT',{weekday:'long',day:'2-digit',month:'long'})}</span></div><div class="stats dashboard-stats"><div class="stat stat-customers"><span>Clienti attivi</span><strong>${state.customers.filter(c=>c.status==='attivo').length}</strong><small>Anagrafiche disponibili</small></div><div class="stat stat-dogs"><span>Cani</span><strong>${state.dogs.filter(d=>d.active).length}</strong><small>Profili attivi</small></div><div class="stat stat-today"><span>Servizi oggi</span><strong>${todays.length}</strong><small>${todays.reduce((a,s)=>a+Number(s.daily_visits||1),0)} uscite previste</small></div><div class="stat stat-review"><span>Da verificare</span><strong>${toVerify}</strong><small>Rapporti in attesa</small></div><div class="stat stat-income"><span>Da incassare</span><strong>${money(toCollect)}</strong><small>Importi cliente maturati</small></div><div class="stat stat-pay"><span>Da liquidare</span><strong>${money(toPay)}</strong><small>Compensi dipendenti</small></div></div><div class="section-title-row"><div><h3>Servizi di oggi</h3><p class="muted">Attività programmate per la giornata.</p></div></div><div class="grid service-grid">${todays.map(serviceCard).join('')||'<div class="card empty-state"><strong>Nessun servizio oggi</strong><span>La giornata non contiene attività programmate.</span></div>'}</div>${!todays.length&&upcoming.length?`<div class="section-title-row compact"><div><h3>Prossimi servizi</h3></div></div><div class="grid service-grid">${upcoming.map(serviceCard).join('')}</div>`:''}`
+  }else{
+    $('#dashboard').innerHTML=`<div class="page-title"><div><span class="eyebrow">AREA DIPENDENTE</span><h2>Il mio lavoro di oggi</h2></div></div><div class="stats dashboard-stats"><div class="stat stat-today"><span>Servizi</span><strong>${todays.length}</strong><small>Assegnati oggi</small></div><div class="stat stat-dogs"><span>Uscite</span><strong>${todays.reduce((a,s)=>a+Number(s.daily_visits||1),0)}</strong><small>Totale previsto</small></div><div class="stat stat-pay"><span>Compenso maturato</span><strong>${money(todays.filter(matured).reduce((a,s)=>a+Number(s.employee_compensation),0))}</strong><small>Solo servizi maturati</small></div></div><div class="grid service-grid">${todays.map(serviceCard).join('')||'<div class="card empty-state"><strong>Nessun servizio oggi</strong><span>Non risultano attività assegnate.</span></div>'}</div>`
+  }
+}
+function renderCustomers(){
+  $('[data-action="new-customer"]')?.classList.toggle('hidden',!isAdmin());
+  $('#customerList').innerHTML=state.customers.map(c=>{
+    const dogs=state.dogs.filter(d=>d.customer_id===c.id);
+    const services=state.services.filter(x=>x.customer_id===c.id&&x.status!=='annullato').sort((a,b)=>String(a.service_date||'').localeCompare(String(b.service_date||'')));
+    const next=services.find(x=>(x.service_date||'')>=localDate());
+    const emergencyName=firstValue(c,'emergency_contact_name');
+    const emergencyPhone=firstValue(c,'emergency_contact_phone');
+    const emergencyType=firstValue(c,'emergency_contact_type');
+    const emergency=[emergencyType,emergencyName,emergencyPhone].filter(Boolean).join(' · ')||firstValue(c,'emergency_contact')||'Non indicato';
+    const address=[firstValue(c,'address'),[firstValue(c,'postal_code'),firstValue(c,'city')].filter(Boolean).join(' ')].filter(Boolean).join(' · ')||'Non indicato';
+    return `<details class="entity-accordion customer-accordion"><summary><span class="accordion-name">${esc(c.first_name)} ${esc(c.last_name)}</span><span class="accordion-chevron" aria-hidden="true"></span></summary><article class="entity-expanded"><div class="entity-card-head"><div class="entity-avatar">${esc((c.first_name||'?').slice(0,1)+(c.last_name||'').slice(0,1))}</div><div><span class="entity-kicker">CLIENTE</span><h3>${esc(c.first_name)} ${esc(c.last_name)}</h3></div></div><div class="entity-details"><p><span>Telefono</span><strong>${esc(displayValue(firstValue(c,'phone')))}</strong></p><p><span>Email</span><strong>${esc(displayValue(firstValue(c,'email')))}</strong></p><p class="wide"><span>Indirizzo</span><strong>${esc(address)}</strong></p><p><span>Cani associati</span><strong>${dogs.length}${dogs.length?` · ${esc(dogs.map(d=>d.name).join(', '))}`:''}</strong></p>${isAdmin()?`<p><span>Dipendente assegnato</span><strong>${esc(pname(c.assigned_employee_id))}</strong></p>`:''}<p class="wide"><span>Contatto emergenza</span><strong>${esc(emergency)}</strong></p><p><span>Reperibilità</span><strong>${esc(displayValue(firstValue(c,'availability'),'Non indicata'))}</strong></p>${next?`<p class="wide"><span>Prossimo servizio</span><strong>${servicePeriod(next)} · ${esc(serviceSlots(next))} · ${esc(next.service_type||'Servizio')}</strong></p>`:''}</div>${isAdmin()?`<div class="card-actions"><button class="primary-soft" onclick="openCustomer('${c.id}')">Apri / modifica</button><button onclick="openQuote(null,'${c.id}')">Crea preventivo</button><button class="danger" onclick="archiveEntity('customers','${c.id}','cliente ${esc(c.first_name+' '+c.last_name)}')">Elimina</button></div>`:`<div class="operational-note"><b>Note operative</b><span>${esc(firstValue(c,'operational_notes')||'Nessuna nota operativa')}</span></div>`}</article></details>`
+  }).join('')||`<div class="card empty-state"><strong>Nessun cliente</strong><span>${isAdmin()?'Aggiungi il primo cliente per iniziare.':'Non risultano clienti assegnati.'}</span></div>`
+}
+function renderDogs(){
+  $('[data-action="new-dog"]')?.classList.toggle('hidden',!isAdmin());
+  $('#dogList').innerHTML=state.dogs.map(d=>{
+    const breed=firstValue(d,'breed_detail','breed','breed_type')||'Razza non indicata';
+    const health=[firstValue(d,'health_risk'),firstValue(d,'illnesses_detail','illnesses','medical_notes'),firstValue(d,'allergies_detail','allergies'),firstValue(d,'medicines_detail','medicines')].filter(Boolean).join(' · ')||'Nessuna criticità indicata';
+    const food=[firstValue(d,'food_type','feeding_notes'),firstValue(d,'food_detail'),firstValue(d,'meals'),firstValue(d,'meal_times')].filter(Boolean).join(' · ')||'Nessuna indicazione';
+    const behavior=[firstValue(d,'character','behavior_notes'),firstValue(d,'adults'),firstValue(d,'children'),firstValue(d,'dogs_social'),firstValue(d,'fears_detail','fears'),firstValue(d,'bite_history_detail','bite_history'),firstValue(d,'resource_guarding_detail','resource_guarding')].filter(Boolean).join(' · ')||'Nessuna nota';
+    const walk=[firstValue(d,'equipment'),firstValue(d,'equipment_detail'),firstValue(d,'dog_triggers'),firstValue(d,'moving_triggers'),firstValue(d,'avoid_areas_detail','avoid_areas'),firstValue(d,'off_leash'),firstValue(d,'walk_level')].filter(Boolean).join(' · ')||'Indicazioni non compilate';
+    const vet=[firstValue(d,'vet_name','vet_status'),firstValue(d,'vet_phone')].filter(Boolean).join(' · ')||'Non indicato';
+    return `<details class="entity-accordion dog-accordion"><summary><span class="accordion-name">${esc(d.name)}</span><span class="accordion-chevron" aria-hidden="true"></span></summary><article class="entity-expanded"><div class="entity-card-head"><div class="entity-avatar dog-avatar">🐕</div><div><span class="entity-kicker">CANE</span><h3>${esc(d.name)}</h3><p class="entity-subtitle">${esc(breed)}</p></div></div><div class="entity-details"><p><span>Proprietario</span><strong>${esc(cname(d.customer_id))}</strong></p><p><span>Taglia / età</span><strong>${esc([firstValue(d,'size'),firstValue(d,'age_detail','age_range')].filter(Boolean).join(' · ')||'Non indicate')}</strong></p><p><span>Peso / sesso</span><strong>${esc([firstValue(d,'weight_detail'),firstValue(d,'sex'),firstValue(d,'sterilized')].filter(Boolean).join(' · ')||'Non indicati')}</strong></p><p><span>Microchip</span><strong>${esc(firstValue(d,'microchip_number','microchip')||'Non indicato')}</strong></p><p class="wide"><span>Veterinario</span><strong>${esc(vet)}</strong></p><p class="wide"><span>Salute e sicurezza</span><strong>${esc(health)}</strong></p><p class="wide"><span>Alimentazione e routine</span><strong>${esc(food)}</strong></p><p class="wide"><span>Comportamento</span><strong>${esc(behavior)}</strong></p><p class="wide"><span>Passeggiata</span><strong>${esc(walk)}</strong></p>${firstValue(d,'routine_notes')?`<p class="wide"><span>Routine / note operative</span><strong>${esc(firstValue(d,'routine_notes'))}</strong></p>`:''}</div>${isAdmin()?`<div class="card-actions"><button class="primary-soft" onclick="openDog('${d.id}')">Apri / modifica</button><button class="danger" onclick="archiveEntity('dogs','${d.id}','cane ${esc(d.name)}')">Elimina</button></div>`:''}</article></details>`
+  }).join('')||`<div class="card empty-state"><strong>Nessun cane</strong><span>${isAdmin()?'Collega un cane a un cliente per visualizzarlo qui.':'Non risultano cani assegnati.'}</span></div>`
+}
+function renderEmployees(){
+  const groups=[
+    {key:'administrators',label:'Amministratori',rows:state.profiles.filter(p=>p.role==='owner'||p.role==='vice_admin')},
+    {key:'employees',label:'Dipendenti',rows:state.profiles.filter(p=>p.role==='dipendente')}
+  ];
+  $('#employeeList').innerHTML=groups.map(group=>`<details class="account-group" open><summary><span>${group.label}</span><strong>${group.rows.length}</strong></summary><div class="account-group-body">${group.rows.map(p=>{const assigned=state.services.filter(s=>s.employee_id===p.id&&s.status!=='annullato').length;return `<details class="account-row" data-profile-id="${p.id}"><summary><div class="account-summary-main"><span class="entity-avatar employee-avatar">${esc((p.full_name||p.email||'?').slice(0,2).toUpperCase())}</span><div><strong>${esc(p.full_name||p.email)}</strong><small>${esc(roleLabels[p.role]||p.role)} · ${p.active?'Attivo':'Sospeso'}</small></div></div><span class="account-chevron">⌄</span></summary><div class="account-expanded"><div class="entity-details"><p><span>Codice</span><strong>${esc(p.employee_code||'Non assegnato')}</strong></p><p><span>Qualifica</span><strong>${esc(p.qualification||'Non indicata')}</strong></p><p><span>Servizi associati</span><strong>${assigned}</strong></p><p><span>Stato</span><strong class="${p.active?'text-success':'text-danger'}">${p.active?'Attivo':'Sospeso'}</strong></p></div>${p.is_owner?'<div class="protected-note">Titolare protetto</div>':''}<div class="card-actions"><button class="primary-soft" onclick="openEmployee('${p.id}')">Seleziona e gestisci</button>${!p.is_owner&&p.active?`<button class="danger" onclick="deactivateUser('${p.id}','${esc(p.full_name||p.email)}')">Disattiva</button>`:''}</div></div></details>`}).join('')||'<div class="empty-compact">Nessun account in questa categoria.</div>'}</div></details>`).join('')
+}
+function plannedEndTime(s){const raw=String(s.service_time||'').slice(0,5);if(!/^\d{2}:\d{2}$/.test(raw))return '—';const [h,m]=raw.split(':').map(Number),total=h*60+m+Number(s.planned_duration_minutes||0);return `${String(Math.floor(total/60)%24).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`}
+function serviceCard(s){
+  const margin=Number(s.customer_amount||0)-Number(s.employee_compensation||0), status=statusLabels[s.status]||s.status, visits=Number(s.daily_visits||1), total=totalVisits(s);let actions='';
+  if(isEmployee()){actions=`<button class="primary-soft" onclick="viewService('${s.id}')">Visualizza</button>`}
+  else{actions=`<button class="primary-soft" onclick="viewService('${s.id}')">Apri</button><button onclick="openService('${s.id}')">Modifica</button><button onclick="duplicateService('${s.id}')">Duplica</button><button onclick="openQuote(null,'${s.customer_id}','${s.dog_id}','${s.id}')">Preventivo</button>${!['chiuso','annullato'].includes(s.status)?`<button onclick="closeService('${s.id}')">Chiudi servizio</button>`:''}<button class="danger" onclick="archiveEntity('dogsitter_services','${s.id}','servizio')">Elimina</button>${s.status==='da_verificare'?`<button class="primary" onclick="approveService('${s.id}')">Approva e genera PDF</button>`:''}${s.status==='chiuso'?`<button onclick="createDocumentVersionFromService('${s.id}','customer')">PDF cliente</button><button onclick="createDocumentVersionFromService('${s.id}','employee')">PDF dipendente</button><button onclick="markSent('${s.id}')">Segna inviato</button>`:''}`}
+  const employeeUnit=Number(s.employee_unit_compensation||0)||Number(s.employee_compensation||0)/Math.max(1,total);
+  const economics=isEmployee()?`<div class="employee-compensation"><span>Compenso della scheda</span><strong>${money(s.employee_compensation)}</strong><small>${money(employeeUnit)} per uscita · ${total} uscite totali</small></div>`:`<div class="economic-split"><div><span>Importo cliente</span><strong>${money(s.customer_amount)}</strong></div><div><span>Compenso per uscita</span><strong>${money(employeeUnit)}</strong></div><div><span>Compenso totale</span><strong>${money(s.employee_compensation)}</strong></div><div><span>Margine attività</span><strong>${money(margin)}</strong></div></div>`;
+  const employeeFacts=isEmployee()?`<div><span>Periodo</span><strong>${esc(servicePeriod(s))}</strong></div><div><span>Frequenza</span><strong>${esc(displayValue(s.frequency,'Non indicata'))}</strong></div><div><span>Fasce orarie</span><strong>${esc(serviceSlots(s))}</strong></div><div><span>Durata</span><strong>${Number(s.planned_duration_minutes||0)} min</strong></div><div><span>Uscite/giorno</span><strong>${visits}</strong></div><div><span>Uscite totali</span><strong>${total}</strong></div>`:`<div><span>Periodo</span><strong>${esc(servicePeriod(s))}</strong></div><div><span>Fasce orarie</span><strong>${esc(serviceSlots(s))}</strong></div><div><span>Durata</span><strong>${Number(s.planned_duration_minutes||0)} min</strong></div><div><span>Uscite totali</span><strong>${total}</strong></div><div><span>Dipendente</span><strong>${esc(pname(s.employee_id))}</strong></div>`;
+  return `<details class="record-accordion service-accordion"><summary><div class="record-summary-main"><span class="record-title">${esc(dname(s.dog_id))}</span><small>${esc(cname(s.customer_id))} · ${dateIT(s.service_date)} · ${esc(s.service_type||'Servizio')}</small></div><span class="status-badge status-${esc(s.status)}">${esc(status)}</span><span class="accordion-chevron" aria-hidden="true"></span></summary><article class="record-expanded service-card"><div class="service-card-top"><div><span class="entity-kicker">${esc(s.service_type||'SERVIZIO')}</span><h3>${esc(dname(s.dog_id))}</h3><p>${esc(cname(s.customer_id))}</p></div></div><div class="service-facts">${employeeFacts}</div>${economics}${s.keys_status||s.customer_updates?`<div class="operational-note"><b>Organizzazione</b><span>${esc([s.keys_status&&`Chiavi: ${s.keys_status}`,s.customer_updates&&`Aggiornamenti: ${s.customer_updates}`].filter(Boolean).join(' · '))}</span></div>`:''}${s.operational_notes?`<div class="operational-note"><b>Note operative</b><span>${esc(s.operational_notes)}</span></div>`:''}${s.started_at?`<div class="timeline-note"><b>Orari effettivi</b><span>Inizio ${new Date(s.started_at).toLocaleString('it-IT')}${s.completed_at?` · Fine ${new Date(s.completed_at).toLocaleString('it-IT')}`:''}</span></div>`:''}${s.report_text?`<div class="operational-note"><b>Rapporto</b><span>${esc(s.report_text)}</span></div>`:''}<div class="service-actions">${actions}</div></article></details>`
+}
+function renderServices(){
+  $('[data-action="new-service"]')?.classList.toggle('hidden',!isAdmin());
+  $('#clearFilters')?.classList.toggle('hidden',!isAdmin());
+  const d=$('#serviceDateFilter').value,st=$('#serviceStatusFilter').value;
+  $('#serviceList').innerHTML=state.services.filter(s=>(!d||s.service_date===d)&&(!st||s.status===st)).map(serviceCard).join('')||'<div class="card">Nessun servizio.</div>'
+}
+
+
+const serviceTypePresets=['Dog Walking','Dogsitting a domicilio','Visita a domicilio','Pensione diurna','Accompagnamento veterinario','Trasporto cane','Somministrazione farmaci','Servizio emergenza','Altro servizio'];
+const frequencyPresets=['Una volta','Giornaliero','Settimanale','Weekend','Occasionale','Da concordare'];
+const visitPresets=[1,2,3,4];
+const timeSlotPresets=['Mattina presto 6:00-8:00','Mattina 8:00-11:00','Pausa pranzo 11:00-14:00','Pomeriggio 14:00-17:00','Tardo pomeriggio 17:00-19:00','Sera 19:00-22:00','Da concordare'];
+const durationPresets=[[30,'30 minuti'],[45,'45 minuti'],[60,'60 minuti'],[90,'Oltre 60 minuti'],[0,'Da concordare']];
+const paymentPresets=['Contanti','Bonifico','PayPal','Satispay','Carta','Altro'];
+const clientStatusPresets=['Nuovo','Attivo','Cliente abituale','Sospeso','Terminato'];
+const paymentStatusPresets=[{value:'da_incassare',label:'Da incassare'},{value:'incassato',label:'Incassato'}];
+const quotePaymentStatusPresets=['Da pagare','Acconto ricevuto','Pagato','Abbonamento attivo'];
+const keysPresets=['Sì','No','Da concordare'];
+const keysModePresets=['Consegna a mano','Ritiro presso domicilio','Cassetta sicurezza','Da concordare'];
+const updatePresets=['Messaggio WhatsApp','Foto/video','Solo emergenze','Report a fine servizio','Da concordare'];
+const authorizationPresets=['Autorizzo','Non autorizzo','Solo dopo contatto telefonico'];
+const selectOptions=(values,current='',empty='Seleziona')=>`<option value="">${empty}</option>`+values.map(v=>{const value=Array.isArray(v)?v[0]:v,label=Array.isArray(v)?v[1]:v;return `<option value="${esc(value)}" ${String(value)===String(current)?'selected':''}>${esc(label)}</option>`}).join('');
+const daysInclusive=(start,end)=>{if(!start||!end)return 1;const a=new Date(start+'T00:00:00'),b=new Date(end+'T00:00:00');return Math.max(1,Math.round((b-a)/86400000)+1)};
+
+const quoteStatusLabels={bozza:'Bozza',inviato:'Inviato',accettato:'Accettato',rifiutato:'Rifiutato',scaduto:'Scaduto'};
+function quoteTotal(q){return Number(q.total_amount||0)}
+function renderQuotes(){
+  if(!isAdmin()){show('dashboard');return}
+  const host=$('#quoteList');
+  host.innerHTML=state.quotes.map(q=>{
+    const items=(q.quote_items||[]).sort((a,b)=>Number(a.position||0)-Number(b.position||0));
+    const itemSummary=items.length===1?items[0]?.description:`${items.length} servizi`;
+    return `<details class="record-accordion quote-accordion"><summary><div class="record-summary-main"><span class="record-title">${esc(cname(q.customer_id))}</span><small>${esc(dname(q.dog_id))} · ${dateIT(q.quote_date)} · ${esc(itemSummary||'Preventivo')}</small></div><strong class="record-amount">${money(quoteTotal(q))}</strong><span class="status-badge status-${esc(q.status)}">${esc(quoteStatusLabels[q.status]||q.status)}</span><span class="accordion-chevron" aria-hidden="true"></span></summary><article class="record-expanded quote-card"><div class="service-facts"><div><span>Data</span><strong>${dateIT(q.quote_date)}</strong></div><div><span>Valido fino al</span><strong>${dateIT(q.valid_until)}</strong></div><div><span>Voci</span><strong>${items.length}</strong></div><div><span>Totale</span><strong>${money(quoteTotal(q))}</strong></div></div><div class="quote-items-preview">${items.map(i=>`<div><span>${esc(i.description)}</span><strong>${Number(i.quantity)} × ${money(i.unit_price)}</strong></div>`).join('')}</div>${q.notes?`<div class="operational-note"><b>Note</b><span>${esc(q.notes)}</span></div>`:''}<div class="service-actions"><button class="primary-soft" onclick="openQuote('${q.id}')">Modifica</button><button class="primary" onclick="generateQuoteDocument('${q.id}')">Genera PDF</button><button onclick="setQuoteStatus('${q.id}','inviato')">Segna inviato</button><button onclick="setQuoteStatus('${q.id}','accettato')">Accettato</button><button onclick="setQuoteStatus('${q.id}','rifiutato')">Rifiutato</button><button onclick="transformQuoteToService('${q.id}')">Trasforma in servizio</button></div></article></details>`
+  }).join('')||'<div class="card empty-state"><strong>Nessun preventivo</strong><span>Crea il primo preventivo partendo da un cliente.</span></div>';
+}
+const quoteServicePresets=[...serviceTypePresets.filter(v=>v!=='Altro servizio'),'Servizio personalizzato'];
+const quotePaymentPresets=[...paymentPresets];
+function quoteItemRow(item={}){
+  const current=item.description||'Passeggiata 30 minuti';
+  const isCustom=!quoteServicePresets.includes(current)||current==='Servizio personalizzato';
+  const qty=Math.max(1,Math.round(Number(item.quantity||1)));
+  return `<div class="quote-item-row">
+    <label class="quote-description">Servizio
+      <select name="quote_item_service" onchange="handleQuoteServiceChange(this)" required>
+        ${quoteServicePresets.map(v=>`<option value="${esc(v)}" ${v===current||isCustom&&v==='Servizio personalizzato'?'selected':''}>${esc(v)}</option>`).join('')}
+      </select>
+    </label>
+    <label class="quote-custom ${isCustom?'':'hidden'}">Descrizione personalizzata
+      <input name="quote_item_custom" value="${esc(isCustom&&current!=='Servizio personalizzato'?current:'')}" maxlength="120" placeholder="Descrivi il servizio">
+    </label>
+    <label>Quantità
+      <select name="quote_item_quantity" onchange="recalculateQuoteTotal()">
+        ${Array.from({length:30},(_,i)=>i+1).map(n=>`<option value="${n}" ${n===qty?'selected':''}>${n}</option>`).join('')}
+      </select>
+    </label>
+    <label>Prezzo unitario (€)
+      <input name="quote_item_unit_price" inputmode="decimal" type="number" min="0" step="0.01" value="${Number(item.unit_price||0)}" oninput="recalculateQuoteTotal()" required>
+    </label>
+    <button type="button" class="danger quote-remove" onclick="removeQuoteItem(this)" aria-label="Rimuovi voce">Rimuovi</button>
+  </div>`
+}
+window.handleQuoteServiceChange=select=>{
+  const row=select.closest('.quote-item-row');
+  const custom=row?.querySelector('.quote-custom');
+  const input=row?.querySelector('[name="quote_item_custom"]');
+  const enabled=select.value==='Servizio personalizzato';
+  custom?.classList.toggle('hidden',!enabled);
+  if(input){input.required=enabled;if(!enabled)input.value=''}
+};
+window.removeQuoteItem=button=>{
+  const host=$('#quoteItems');
+  if(!host)return;
+  if(host.querySelectorAll('.quote-item-row').length<=1)return toast('Il preventivo deve contenere almeno una voce.');
+  button.closest('.quote-item-row')?.remove();
+  recalculateQuoteTotal();
+};
+window.addQuoteItem=(item={})=>{const host=$('#quoteItems');if(host){host.insertAdjacentHTML('beforeend',quoteItemRow(item));recalculateQuoteTotal()}};
+window.recalculateQuoteTotal=()=>{const rows=$$('.quote-item-row');const subtotal=rows.reduce((sum,row)=>sum+Number(row.querySelector('[name="quote_item_quantity"]')?.value||0)*Number(row.querySelector('[name="quote_item_unit_price"]')?.value||0),0);const rate=Number($('#quoteDiscount')?.value||0);const discount=subtotal*rate/100;const total=subtotal-discount;if($('#quoteSubtotalPreview'))$('#quoteSubtotalPreview').textContent=money(subtotal);if($('#quoteDiscountPreview'))$('#quoteDiscountPreview').textContent=money(discount);if($('#quoteTotalPreview'))$('#quoteTotalPreview').textContent=money(total);return total};
+window.openQuote=(id=null,customerId='',dogId='',sourceServiceId='')=>{
+  if(!isAdmin())return toast('Funzione disponibile solo a titolare e vice amministratore.');
+  if(!state.customers.length)return toast('Prima di creare un preventivo inserisci almeno un cliente.');
+  const q=state.quotes.find(x=>x.id===id)||{};
+  const source=sourceServiceId?state.services.find(x=>x.id===sourceServiceId):null;
+  const selectedCustomer=q.customer_id||customerId||source?.customer_id||state.customers[0]?.id||'';
+  const selectedDog=q.dog_id||dogId||source?.dog_id||'';
+  const today=localDate();
+  const quoteDate=q.quote_date||today;
+  const validUntil=q.valid_until||addDays(quoteDate,30);
+  const validityPreset=quoteValidityValue(quoteDate,validUntil);
+  const rows=q.quote_items?.length?q.quote_items:[{description:source?.service_type||'Dog Walking',quantity:Number(source?.daily_visits||1),unit_price:Number(source?.unit_rate||source?.customer_amount||0)}];
+  const currentPayment=q.payment_terms||source?.payment_method||'Bonifico';
+  const paymentIsCustom=!quotePaymentPresets.includes(currentPayment);
+  modal(id?'Modifica preventivo':'Nuovo preventivo',`<div class="form-grid quote-form-grid">
+    <label>Cliente<select id="quoteCustomer" name="customer_id" required><option value="">Seleziona cliente</option>${state.customers.map(c=>`<option value="${c.id}" ${c.id===selectedCustomer?'selected':''}>${esc(c.first_name+' '+c.last_name)}</option>`).join('')}</select></label>
+    <label>Cane<select id="quoteDog" name="dog_id"><option value="">Nessun cane / seleziona</option></select></label>
+    ${field('quote_date','Data preventivo',quoteDate,'date','required')}
+    <label>Validità<select id="quoteValidityPreset"><option value="7" ${validityPreset==='7'?'selected':''}>7 giorni</option><option value="15" ${validityPreset==='15'?'selected':''}>15 giorni</option><option value="30" ${validityPreset==='30'?'selected':''}>30 giorni</option><option value="60" ${validityPreset==='60'?'selected':''}>60 giorni</option><option value="90" ${validityPreset==='90'?'selected':''}>90 giorni</option><option value="custom" ${validityPreset==='custom'?'selected':''}>Data personalizzata</option></select></label>
+    ${field('valid_until','Validità fino al',validUntil,'date','required')}
+    <label>Stato<select name="status">${Object.entries(quoteStatusLabels).map(([v,l])=>`<option value="${v}" ${v===(q.status||'bozza')?'selected':''}>${l}</option>`).join('')}</select></label>
+    <label>Frequenza<select name="frequency">${selectOptions(frequencyPresets,q.frequency||source?.frequency||'Una volta')}</select></label>
+    <label>Uscite / visite al giorno<select id="quoteDailyVisits" name="daily_visits">${selectOptions(visitPresets,q.daily_visits||source?.daily_visits||1)}</select></label>
+    <label>Data inizio prevista<input name="start_date" type="date" value="${esc(q.start_date||source?.service_date||today)}"></label>
+    <label>Data fine prevista<input name="end_date" type="date" value="${esc(q.end_date||source?.end_date||source?.service_date||today)}"></label>
+    <label>Durata uscita / visita<select name="planned_duration_minutes">${selectOptions(durationPresets,q.planned_duration_minutes??source?.planned_duration_minutes??30)}</select></label>
+    ${[1,2,3,4].map(n=>`<label class="quote-slot quote-slot-${n}">Fascia oraria ${n}ª<select name="time_slot_${n}">${selectOptions(timeSlotPresets,q[`time_slot_${n}`]||source?.[`time_slot_${n}`]||'')}</select></label>`).join('')}
+    <label>Sconto<select id="quoteDiscount" name="discount_rate"><option value="0" ${Number(q.discount_rate||0)===0?'selected':''}>Nessuno sconto</option><option value="5" ${Number(q.discount_rate||0)===5?'selected':''}>Sconto 5%</option><option value="10" ${Number(q.discount_rate||0)===10?'selected':''}>Sconto 10%</option></select></label>
+    <label>Modalità pagamento<select id="quotePaymentPreset">${quotePaymentPresets.map(v=>`<option value="${esc(v)}" ${v===(paymentIsCustom?'Altro':currentPayment)?'selected':''}>${esc(v)}</option>`).join('')}</select></label>
+    <label id="quoteCustomPaymentLabel" class="${paymentIsCustom?'':'hidden'}">Modalità personalizzata<input id="quoteCustomPayment" value="${esc(paymentIsCustom?currentPayment:'')}" maxlength="200"></label>
+    <label>Stato cliente<select name="client_status">${clientStatusPresets.map(v=>`<option ${v===(q.client_status||'Nuovo')?'selected':''}>${v}</option>`).join('')}</select></label>
+    <label>Stato pagamento<select name="payment_status">${quotePaymentStatusPresets.map(v=>`<option ${v===(q.payment_status||'Da pagare')?'selected':''}>${v}</option>`).join('')}</select></label>
+    <label>Chiavi affidate?<select id="quoteKeys" name="keys_status">${selectOptions(keysPresets,q.keys_status||'')}</select></label>
+    <label id="quoteKeysModeWrap">Modalità consegna chiavi<select name="keys_mode">${selectOptions(keysModePresets,q.keys_mode||'')}</select></label>
+    <label>Aggiornamenti al proprietario<select name="customer_updates">${selectOptions(updatePresets,q.customer_updates||'Messaggio WhatsApp')}</select></label>
+    <label>Contatto veterinario in emergenza<select name="auth_vet">${selectOptions(authorizationPresets,q.auth_vet||'Solo dopo contatto telefonico')}</select></label>
+    <label>Trasporto in clinica veterinaria<select name="auth_transport">${selectOptions(authorizationPresets,q.auth_transport||'Solo dopo contatto telefonico')}</select></label>
+    <label class="wide">Note<textarea name="notes">${esc(q.notes||source?.operational_notes||'')}</textarea></label>
+  </div><section class="quote-items-section"><div class="section-head quote-section-head"><h3>Voci del preventivo</h3><button type="button" onclick="addQuoteItem()">Aggiungi voce</button></div><div id="quoteItems">${rows.map(quoteItemRow).join('')}</div><div class="quote-calculation"><div><span>Subtotale</span><strong id="quoteSubtotalPreview">0,00 €</strong></div><div><span>Sconto</span><strong id="quoteDiscountPreview">0,00 €</strong></div></div><div class="quote-total"><span>Totale preventivo</span><strong id="quoteTotalPreview">${money(q.total_amount||0)}</strong></div></section>`,async formData=>{
+    const itemRows=$$('.quote-item-row');
+    const items=itemRows.map((row,index)=>{const preset=row.querySelector('[name="quote_item_service"]')?.value||'';const custom=String(row.querySelector('[name="quote_item_custom"]')?.value||'').trim();const description=preset==='Servizio personalizzato'?custom:preset;return {description,quantity:Number(row.querySelector('[name="quote_item_quantity"]')?.value||0),unit_price:Number(row.querySelector('[name="quote_item_unit_price"]')?.value||0),position:index+1}});
+    if(items.some(i=>!i.description||i.quantity<=0||i.unit_price<0))throw Error('Controlla tutte le voci del preventivo.');
+    const paymentPreset=$('#quotePaymentPreset')?.value||'Bonifico';const paymentCustom=String($('#quoteCustomPayment')?.value||'').trim();const paymentTerms=paymentPreset==='Altro'?paymentCustom:paymentPreset;if(!paymentTerms)throw Error('Indica la modalità di pagamento.');
+    const raw=Object.fromEntries(formData);if(!parseLocalDate(raw.quote_date)||!parseLocalDate(raw.valid_until))throw Error('Controlla la data del preventivo e la validità.');if(daysBetween(raw.quote_date,raw.valid_until)<0)throw Error('La validità non può precedere la data del preventivo.');const subtotal=items.reduce((sum,i)=>sum+i.quantity*i.unit_price,0);const discount=Number(raw.discount_rate||0);const total=subtotal*(1-discount/100);
+    const payload={customer_id:raw.customer_id,dog_id:raw.dog_id||null,source_service_id:sourceServiceId||q.source_service_id||null,quote_date:raw.quote_date,valid_until:raw.valid_until,status:raw.status,payment_terms:paymentTerms,notes:raw.notes||null,total_amount:total,subtotal_amount:subtotal,discount_rate:discount,frequency:raw.frequency||null,daily_visits:Number(raw.daily_visits||1),start_date:raw.start_date||null,end_date:raw.end_date||null,planned_duration_minutes:Number(raw.planned_duration_minutes||0),time_slot_1:raw.time_slot_1||null,time_slot_2:raw.time_slot_2||null,time_slot_3:raw.time_slot_3||null,time_slot_4:raw.time_slot_4||null,client_status:raw.client_status||null,payment_status:raw.payment_status||null,keys_status:raw.keys_status||null,keys_mode:raw.keys_mode||null,customer_updates:raw.customer_updates||null,auth_vet:raw.auth_vet||null,auth_transport:raw.auth_transport||null};
+    let quoteId=id;if(id){await update('dogsitter_quotes',id,payload);await request(`/rest/v1/dogsitter_quote_items?quote_id=eq.${encodeURIComponent(id)}`,{method:'DELETE',headers:{Prefer:'return=minimal'}})}else{const created=await insert('dogsitter_quotes',payload);quoteId=created[0]?.id;if(!quoteId)throw Error('Preventivo non creato.')}await insert('dogsitter_quote_items',items.map(i=>({...i,quote_id:quoteId})));
+  });
+  const customer=$('#quoteCustomer'),dog=$('#quoteDog');const fillDogs=()=>{const dogs=state.dogs.filter(d=>d.customer_id===customer.value);dog.innerHTML='<option value="">Nessun cane / seleziona</option>'+dogs.map(d=>`<option value="${d.id}" ${d.id===selectedDog?'selected':''}>${esc(d.name)}</option>`).join('');if(!id&&dogs.length===1)dog.value=dogs[0].id};customer.onchange=fillDogs;fillDogs();
+  $('#quoteValidityPreset').onchange=e=>{if(e.target.value!=='custom')$('[name="valid_until"]').value=addDays($('[name="quote_date"]').value||localDate(),Number(e.target.value))};
+  $('[name="quote_date"]').onchange=()=>{if($('#quoteValidityPreset').value!=='custom')$('[name="valid_until"]').value=addDays($('[name="quote_date"]').value,Number($('#quoteValidityPreset').value))};
+  $('#quotePaymentPreset').onchange=e=>$('#quoteCustomPaymentLabel').classList.toggle('hidden',e.target.value!=='Altro');
+  const toggleQuoteSlots=()=>{const n=Number($('#quoteDailyVisits').value||1);for(let i=1;i<=4;i++)document.querySelector(`.quote-slot-${i}`)?.classList.toggle('hidden',i>n)};$('#quoteDailyVisits').onchange=toggleQuoteSlots;toggleQuoteSlots();
+  const toggleQuoteKeys=()=>$('#quoteKeysModeWrap').classList.toggle('hidden',!['Sì','Da concordare'].includes($('#quoteKeys').value));$('#quoteKeys').onchange=toggleQuoteKeys;toggleQuoteKeys();
+  $('#quoteDiscount').onchange=recalculateQuoteTotal;recalculateQuoteTotal();
+};
+window.setQuoteStatus=async(id,status)=>{await update('dogsitter_quotes',id,{status});await loadAll();renderQuotes();toast(`Preventivo: ${quoteStatusLabels[status]||status}`)};
+window.transformQuoteToService=id=>{
+  const q=state.quotes.find(x=>x.id===id);
+  if(!q)return toast('Preventivo non trovato');
+  if(q.converted_service_id)return toast('Il preventivo è già stato trasformato in servizio.');
+  const items=(q.quote_items||[]).sort((a,b)=>Number(a.position||0)-Number(b.position||0));
+  const type=items.map(i=>i.description).filter(Boolean).join(' + ').slice(0,80)||'Servizio dogsitter';
+  const start=q.start_date||q.quote_date||localDate();
+  const end=q.end_date||start;
+  const daily=Math.max(1,Number(q.daily_visits||1));
+  const totalVisits=Math.max(1,daysInclusive(start,end)*daily);
+  const customerAmount=Number(q.total_amount||quoteTotal(q)||0);
+  const unitRate=items.length===1?Number(items[0].unit_price||0):(totalVisits?customerAmount/totalVisits:0);
+  openService(null,{
+    quote_id:q.id,
+    customer_id:q.customer_id,
+    dog_id:q.dog_id,
+    service_type:type,
+    frequency:q.frequency||'Una volta',
+    service_date:start,
+    end_date:end,
+    service_time:String(q.time_slot_1||'09:00').slice(0,5),
+    planned_duration_minutes:Number(q.planned_duration_minutes||30),
+    daily_visits:daily,
+    time_slot_1:q.time_slot_1||null,
+    time_slot_2:q.time_slot_2||null,
+    time_slot_3:q.time_slot_3||null,
+    time_slot_4:q.time_slot_4||null,
+    unit_rate:Number(unitRate.toFixed(2)),
+    discount_rate:Number(q.discount_rate||0),
+    customer_amount:customerAmount,
+    employee_unit_compensation:0,
+    employee_compensation:0,
+    payment_method:q.payment_terms||'Bonifico',
+    client_status:q.client_status||'Confermato',
+    customer_payment_status:'da_incassare',
+    keys_status:q.keys_status||null,
+    keys_mode:q.keys_mode||null,
+    customer_updates:q.customer_updates||'Messaggio WhatsApp',
+    auth_vet:q.auth_vet||'Solo dopo contatto telefonico',
+    auth_transport:q.auth_transport||'Solo dopo contatto telefonico',
+    operational_notes:[`Servizio derivato dal preventivo del ${dateIT(q.quote_date)}.`,q.notes||''].filter(Boolean).join('\n'),
+    status:'programmato'
+  });
+};
+
+function periodTotals(filter){const rows=state.services.filter(s=>filter(s)&&matured(s));return {sum:rows.reduce((a,s)=>a+Number(s.employee_compensation),0),visits:rows.reduce((a,s)=>a+Number(s.daily_visits||1),0)}}
+function renderComp(){const now=new Date(),today=localDate(now),week=new Date(now);week.setDate(now.getDate()-((now.getDay()+6)%7));const ws=localDate(week),month=today.slice(0,7);const defs=[['Oggi',s=>s.service_date===today],['Settimana',s=>s.service_date>=ws&&s.service_date<=today],['Mese',s=>s.service_date.startsWith(month)]];$('#compCards').innerHTML=defs.map(([l,f])=>{const t=periodTotals(f);return `<div class="stat"><span>${l}</span><strong>${money(t.sum)}</strong><small>${t.visits} uscite</small></div>`}).join('')+`<div class="stat"><span>Da liquidare</span><strong>${money(state.services.filter(s=>matured(s)&&s.employee_payment_status==='da_liquidare').reduce((a,s)=>a+Number(s.employee_compensation),0))}</strong></div>`;$('#compList').innerHTML=state.services.filter(matured).map(serviceCard).join('')}
+function renderPayments(){
+  const maturedRows=state.services.filter(matured),income=maturedRows.filter(s=>s.customer_payment_status==='incassato').reduce((a,s)=>a+Number(s.customer_amount),0),toIncome=maturedRows.filter(s=>s.customer_payment_status==='da_incassare').reduce((a,s)=>a+Number(s.customer_amount),0),toPay=maturedRows.filter(s=>s.employee_payment_status==='da_liquidare').reduce((a,s)=>a+Number(s.employee_compensation),0),margin=maturedRows.reduce((a,s)=>a+Number(s.customer_amount)-Number(s.employee_compensation),0);
+  $('#paymentSummary').innerHTML=`<div class="stat"><span>Incassato</span><strong>${money(income)}</strong></div><div class="stat"><span>Da incassare</span><strong>${money(toIncome)}</strong></div><div class="stat"><span>Da liquidare</span><strong>${money(toPay)}</strong></div><div class="stat"><span>Quota attività maturata</span><strong>${money(margin)}</strong></div>`;
+  $('#paymentList').innerHTML=maturedRows.map(s=>`<details class="record-accordion payment-accordion"><summary><div class="record-summary-main"><span class="record-title">${esc(cname(s.customer_id))}</span><small>${esc(dname(s.dog_id))} · ${dateIT(s.service_date)}</small></div><strong class="record-amount">${money(s.customer_amount)}</strong><span class="accordion-chevron" aria-hidden="true"></span></summary><article class="record-expanded"><div class="entity-details"><p><span>Importo cliente</span><strong>${money(s.customer_amount)}</strong></p><p><span>Stato cliente</span><strong>${esc(s.customer_payment_status)}</strong></p><p><span>Compenso dipendente</span><strong>${money(s.employee_compensation)}</strong></p><p><span>Stato dipendente</span><strong>${esc(s.employee_payment_status)}</strong></p></div><div class="service-actions"><button onclick="setCustomerPaid('${s.id}')">Segna cliente incassato</button><button onclick="setEmployeePaid('${s.id}')">Segna dipendente liquidato</button></div></article></details>`).join('')||'<div class="card">Nessun movimento maturato.</div>'
+}
+function documentTypeLabel(d){if((d.document_type||'customer')==='quote')return 'Preventivo';return d.document_type==='employee'?'PDF dipendente':'PDF cliente'}
+function documentStatusLabel(v){return ({generating:'In generazione',generated:'Generato',inviato:'Inviato',archived:'Archiviato'}[v]||v||'Generato')}
+function renderDocs(){
+  const host=$('#documentList'),docs=state.documents||[],active=docs.filter(d=>d.status!=='archived').length,customers=docs.filter(d=>(d.document_type||'customer')==='customer').length,employees=docs.filter(d=>d.document_type==='employee').length,quotes=docs.filter(d=>d.document_type==='quote').length,sent=docs.filter(d=>d.status==='inviato').length;
+  host.innerHTML=`<div class="document-summary"><div class="stat"><span>Documenti</span><strong>${docs.length}</strong></div><div class="stat"><span>Attivi</span><strong>${active}</strong></div><div class="stat"><span>PDF cliente</span><strong>${customers}</strong></div><div class="stat"><span>PDF dipendente</span><strong>${employees}</strong></div><div class="stat"><span>Preventivi</span><strong>${quotes}</strong></div><div class="stat"><span>Inviati</span><strong>${sent}</strong></div></div><div class="document-toolbar"><input id="documentSearch" type="search" placeholder="Cerca cliente, cane, dipendente o file"><select id="documentTypeFilter"><option value="">Tutti i documenti</option><option value="customer">PDF cliente</option><option value="employee">PDF dipendente</option><option value="quote">Preventivi</option></select><select id="documentStatusFilter"><option value="">Tutti gli stati</option><option value="generated">Generati</option><option value="inviato">Inviati</option><option value="archived">Archiviati</option></select></div><div id="documentCards" class="document-grid"></div>`;
+  const draw=()=>{
+    const q=$('#documentSearch').value.trim().toLowerCase(),type=$('#documentTypeFilter').value,status=$('#documentStatusFilter').value,rows=docs.filter(d=>(!type||(d.document_type||'customer')===type)&&(!status||d.status===status)&&(!q||[d.file_name,d.customer_name,d.dog_name,d.employee_name,d.title].some(v=>String(v||'').toLowerCase().includes(q))));
+    $('#documentCards').innerHTML=rows.map(d=>`<details class="record-accordion document-accordion ${d.is_active===false?'is-superseded':''}"><summary><div class="record-summary-main"><span class="record-title">${esc(d.file_name||d.title||'Documento')}</span><small>${esc(d.customer_name||cname(d.customer_id))} · ${esc(d.dog_name||dname(d.dog_id))}</small></div><span class="document-kind ${d.document_type==='employee'?'internal':d.document_type==='quote'?'quote-kind':''}">${documentTypeLabel(d)}</span><span class="document-version">V${Number(d.version||1)}</span><span class="accordion-chevron" aria-hidden="true"></span></summary><article class="record-expanded document-card"><div class="document-meta"><div><span>Cliente</span><strong>${esc(d.customer_name||cname(d.customer_id))}</strong></div><div><span>Cane</span><strong>${esc(d.dog_name||dname(d.dog_id))}</strong></div><div><span>Dipendente</span><strong>${esc(d.employee_name||pname(d.employee_id))}</strong></div><div><span>${d.document_type==='quote'?'Data preventivo':'Data servizio'}</span><strong>${dateIT(d.quote_date||d.service_date)}</strong></div></div><div class="document-state"><span class="pill">${esc(documentStatusLabel(d.status))}</span>${d.is_active===false?'<span class="pill muted-pill">Versione superata</span>':'<span class="pill active-pill">Versione attiva</span>'}</div><p class="muted">Creato ${d.created_at?new Date(d.created_at).toLocaleString('it-IT'):'—'}</p><div class="service-actions"><button onclick="openDocument('${d.id}')">Apri</button><button onclick="downloadStoredDocument('${d.id}')">Scarica</button><button onclick="shareStoredDocument('${d.id}')">Condividi</button>${d.source_kind==='quote'&&d.quote_id&&d.status!=='archived'?`<button onclick="generateQuoteDocument('${d.quote_id}')">Nuova versione</button>`:d.service_id&&d.status!=='archived'?`<button onclick="regenerateDocument('${d.id}')">Nuova versione</button>`:''}${d.status!=='inviato'&&['customer','quote'].includes(d.document_type||'customer')?`<button onclick="markDocumentSent('${d.id}')">Segna inviato</button>`:''}${d.status!=='archived'?`<button class="danger" onclick="archiveDocument('${d.id}')">Archivia</button>`:''}</div></article></details>`).join('')||'<div class="card">Nessun documento corrispondente.</div>'
+  };
+  $('#documentSearch').oninput=draw;$('#documentTypeFilter').onchange=draw;$('#documentStatusFilter').onchange=draw;draw()
+}
+function auditSubject(a){const d=a.details?.new||a.details?.old||{};if(a.table_name==='customers')return [d.first_name,d.last_name].filter(Boolean).join(' ');if(a.table_name==='dogs')return d.name||'';if(a.table_name==='dogsitter_services')return d.service_type||'';if(a.table_name==='profiles')return d.full_name||d.email||'';return ''}function auditDetails(a){const d=a.details?.new||a.details?.old||{};const hidden=new Set(['id','created_by','updated_at','created_at','customer_id','employee_id','dog_id','deleted_by']);return Object.entries(d).filter(([k,v])=>!hidden.has(k)&&v!==null&&v!=='').slice(0,12).map(([k,v])=>`<div><b>${esc(k.replaceAll('_',' '))}:</b> ${esc(typeof v==='object'?JSON.stringify(v):v)}</div>`).join('')||'<div>Nessun dettaglio aggiuntivo.</div>'}async function renderAudit(){
+  const clearBtn=$('#clearAuditLog');clearBtn?.classList.toggle('hidden',!isOwner());if(clearBtn)clearBtn.onclick=clearAuditLog;
+  const rows=await select('audit_log','select=*&order=created_at.desc&limit=250');
+  const tableNames={customers:'Cliente',dogs:'Cane',dogsitter_services:'Servizio',profiles:'Utente'},actionNames={INSERT:'Creato',UPDATE:'Modificato',DELETE:'Eliminato'};
+  $('#auditList').innerHTML=rows.map((a,i)=>{const who=state.profiles.find(p=>p.id===a.user_id)?.full_name||'Sistema';const obj=tableNames[a.table_name]||a.table_name||'Elemento';const subject=auditSubject(a);const title=`${actionNames[a.action]||a.action} ${obj.toLowerCase()}${subject?`: ${subject}`:''}`;return `<details class="record-accordion audit-accordion"><summary><div class="record-summary-main"><span class="record-title">${esc(title)}</span><small>${new Date(a.created_at).toLocaleString('it-IT')}</small></div><span class="pill">${esc(who)}</span><span class="accordion-chevron" aria-hidden="true"></span></summary><article class="record-expanded"><div class="audit-friendly">${auditDetails(a)}</div></article></details>`}).join('')||'<div class="card">Nessuna attività registrata.</div>'
+}
+async function clearAuditLog(){if(!isOwner())return;const first=confirm('Vuoi azzerare definitivamente tutto il Registro attività? Questa operazione non può essere annullata.');if(!first)return;const typed=prompt('Per confermare scrivi AZZERA');if(typed!=='AZZERA'){toast('Operazione annullata');return}const btn=$('#clearAuditLog');try{if(btn){btn.disabled=true;btn.textContent='Azzeramento...'}const result=await rpc('clear_audit_log');const remaining=await select('audit_log','select=id&limit=1');if(remaining.length)throw Error('Il database non ha cancellato tutte le registrazioni. Riesegui la migrazione 4.1.1 in Supabase.');await renderAudit();const deleted=typeof result==='number'?result:(result?.deleted_count??null);toast(deleted===null?'Registro attività azzerato definitivamente':`Registro azzerato: ${deleted} voci eliminate`)}catch(e){console.error('Errore azzeramento registro:',e);toast(e.message||'Impossibile azzerare il Registro attività')}finally{if(btn){btn.disabled=false;btn.textContent='Azzera definitivamente'}}}
+function passCode(p){if(p.employee_code)return p.employee_code;const suffix=String(p.id||'').replace(/-/g,'').slice(-6).toUpperCase();return p.is_owner||p.role==='owner'?`K9-TIT-${suffix||'000001'}`:`K9-${suffix||'000001'}`}
+function passValidity(p){if(p.is_owner||p.role==='owner')return 'Illimitata';return p.pass_expires_at?dateIT(p.pass_expires_at):'Da definire'}
+function passIssued(p){return p.pass_issued_at?dateIT(p.pass_issued_at):(p.created_at?new Date(p.created_at).toLocaleDateString('it-IT'):'—')}
+function qrImageUrl(value){return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=${encodeURIComponent(value)}`}
+function renderPass(){const p=state.profile;const code=passCode(p);const verifyPayload=`K9PASS|${code}|${p.active?'ATTIVO':'SOSPESO'}`;const adminActions=isAdmin()?`<div class="pass-actions"><button type="button" class="primary" onclick="downloadPassPdf()">Scarica PDF</button><button type="button" onclick="sharePassPdf()">Condividi PDF</button><button type="button" onclick="sharePass()">Condividi dati pass</button><button type="button" onclick="openCurrentProfile()">Modifica dati pass</button></div><p class="muted pass-note">Per modificare foto, codice, qualifica o scadenza usa “Modifica dati pass”.</p>`:'';$('#passCard').innerHTML=`<div class="pass-shell"><article id="printablePass" class="pass pass-professional"><div class="pass-topline"><span>PASS IDENTIFICATIVO</span><span class="pass-status ${p.active?'is-active':'is-suspended'}">${p.active?'ATTIVO':'SOSPESO'}</span></div><div class="pass-head"><div class="pass-photo"><img src="${esc(p.photo_url||identityLogo())}" alt="Foto o logo"></div><div class="pass-person"><small>${esc(state.settings.organization_name||DEFAULT_SETTINGS.organization_name)}</small><h2>${esc(p.full_name||p.email)}</h2><p>${esc(p.qualification||roleLabels[p.role]||p.role)}</p></div></div><div class="pass-data"><div><span>Codice</span><strong>${esc(code)}</strong></div><div><span>Emissione</span><strong>${esc(passIssued(p))}</strong></div><div><span>Validità</span><strong>${esc(passValidity(p))}</strong></div><div><span>Ruolo</span><strong>${esc(roleLabels[p.role]||p.role)}</strong></div></div><div class="pass-verification"><img src="${qrImageUrl(verifyPayload)}" alt="QR di verifica del pass" crossorigin="anonymous"><div><span>Codice di verifica</span><strong>${esc(code)}</strong><small>Scansiona per verificare codice e stato del pass.</small></div></div></article>${adminActions}</div>`}
+window.sharePass=async()=>{if(!isAdmin())return toast('Funzione non disponibile per il dipendente');const p=state.profile,code=passCode(p);const text=`${state.settings.organization_name||DEFAULT_SETTINGS.organization_name}\n${p.full_name||p.email}\n${roleLabels[p.role]||p.role}\nCodice: ${code}\nStato: ${p.active?'ATTIVO':'SOSPESO'}\nValidità: ${passValidity(p)}`;try{if(navigator.share)await navigator.share({title:'Pass K9',text});else{await navigator.clipboard.writeText(text);toast('Dati del pass copiati')}}catch(e){if(e.name!=='AbortError')toast('Condivisione non disponibile')}};
+window.openCurrentProfile=()=>{if(!isAdmin())return toast('Funzione non disponibile per il dipendente');openEmployee(state.profile.id)};
+function modal(title,html,onSave){$('#modalTitle').textContent=title;$('#modalBody').innerHTML=html;const errorBox=$('#modalError');if(errorBox){errorBox.textContent='';errorBox.classList.add('hidden')}$('#modal').showModal();$('#modalForm').onsubmit=async e=>{e.preventDefault();if(e.submitter?.value==='cancel')return $('#modal').close();const save=$('#modalSave');try{if(errorBox){errorBox.textContent='';errorBox.classList.add('hidden')}if(save){save.disabled=true;save.textContent='Salvataggio...'}await onSave(new FormData(e.currentTarget));$('#modal').close();await loadAll();render($$('.screen:not(.hidden)')[0]?.id||'dashboard');toast('Salvato')}catch(err){const message=err?.message||String(err)||'Operazione non riuscita';console.error('Errore modale:',err);if(errorBox){errorBox.textContent=message;errorBox.classList.remove('hidden');errorBox.scrollIntoView({behavior:'smooth',block:'center'})}toast(message)}finally{if(save){save.disabled=false;save.textContent='Salva'}}}}
+const field=(n,l,v='',type='text',extra='')=>`<label>${l}<input name="${n}" type="${type}" value="${esc(v)}" ${extra}></label>`;
+const areaField=(n,l,v='',wide=true)=>`<label class="${wide?'wide':''}">${l}<textarea name="${n}">${esc(v||'')}</textarea></label>`;
+const selectField=(n,l,options,value='',wide=false,placeholder='Seleziona')=>`<label class="${wide?'wide':''}">${l}<select name="${n}"><option value="">${placeholder}</option>${options.map(o=>{const val=typeof o==='string'?o:o.value;const text=typeof o==='string'?o:o.label;return `<option value="${esc(val)}" ${String(val)===String(value||'')?'selected':''}>${esc(text)}</option>`}).join('')}</select></label>`;
+const formSection=(title,subtitle,content,open=false)=>`<details class="data-form-section" ${open?'open':''}><summary><span>${esc(title)}</span><small>${esc(subtitle)}</small></summary><div class="form-grid">${content}</div></details>`;
+
+const emergencyTypes=['Familiare convivente','Familiare non convivente','Amico / referente','Veterinario','Clinica veterinaria','Altro referente'];
+const availabilityOptions=['Sempre reperibile','Reperibile solo mattina','Reperibile solo pomeriggio','Reperibile solo sera','Non sempre reperibile','Da concordare'];
+const breedTypes=['Razza definita','Meticcio','Incrocio','Razza non conosciuta','Da verificare'];
+const sizeOptions=['Piccola','Media','Grande','Gigante','Da verificare'];
+const ageOptions=['Cucciolo fino a 6 mesi','Giovane 6-18 mesi','Adulto 18 mesi-7 anni','Senior oltre 7 anni','Età non conosciuta'];
+const sexOptions=['Maschio','Femmina','Non indicato'];
+const yesNoUnknown=['Sì','No','Non so','Da verificare'];
+const vetOptions=['Veterinario indicato dal cliente','Clinica di fiducia indicata','Nessun veterinario indicato','Da comunicare successivamente'];
+const vaccineOptions=['Aggiornate','Non aggiornate','Non so','Da verificare'];
+const parasiteOptions=['Aggiornato','Non aggiornato','Non so','Da verificare'];
+const illnessOptions=['Nessuna patologia nota','Problemi articolari','Problemi cardiaci','Problemi respiratori','Epilessia / crisi','Problemi gastrointestinali','Altro da approfondire'];
+const allergyOptions=['Nessuna allergia nota','Allergia alimentare','Allergia ambientale','Allergia a farmaci','Altro da approfondire'];
+const medicineOptions=['Nessuna terapia','Terapia giornaliera','Terapia occasionale','Farmaci solo al bisogno','Da verificare con veterinario'];
+const riskOptions=['Basso','Medio','Alto','Da valutare'];
+const foodOptions=['Crocchette','Umido','Alimentazione mista','Casalinga','BARF','Dieta veterinaria','Altro'];
+const mealOptions=['1 pasto al giorno','2 pasti al giorno','3 pasti al giorno','Pasti frazionati'];
+const treatOptions=['Consentiti','Non consentiti','Solo premi forniti dal proprietario','Solo previo consenso'];
+const homeRuleOptions=['Può accedere a tutti gli ambienti','Non può salire su divano/letto','Accesso limitato ad alcune stanze','Resta in area dedicata','Altro'];
+const characterOptions=['Socievole','Tranquillo','Vivace','Timido','Diffidente','Reattivo','Da valutare'];
+const socialOptions=['Socievole','Diffidente','Selettivo','Reattivo','Da evitare','Mai testato'];
+const childrenOptions=['Socievole','Diffidente','Reattivo','Da evitare','Mai testato'];
+const fearOptions=['Nessuna paura nota','Rumori forti','Temporali / fuochi','Persone sconosciute','Cani sconosciuti','Traffico / mezzi','Altro da approfondire'];
+const biteOptions=['Nessun episodio','Morso a persona','Morso ad altro cane','Pinzata / avviso','Da approfondire obbligatoriamente'];
+const guardingOptions=['Assente','Su cibo','Su giochi','Su spazi','Su persone','Da valutare'];
+const equipmentOptions=['Pettorina ad H','Pettorina norvegese','Collare fisso','Collare semistrozzo','Guinzaglio lungo','Da verificare'];
+const dogTriggerOptions=['Indifferente','Vuole salutare','Abbaia','Tira','Reattivo','Da valutare'];
+const movingTriggerOptions=['Indifferente','Insegue','Abbaia','Si spaventa','Reattivo','Da valutare'];
+const avoidOptions=['Nessuna zona particolare','Aree cani','Strade trafficate','Luoghi affollati','Presenza bambini','Presenza altri animali'];
+const offLeashOptions=['No','Sì solo in area recintata','Sì su indicazione del proprietario','Da non lasciare mai libero'];
+const walkLevelOptions=['Facile gestione','Media attenzione','Gestione impegnativa','Necessaria esperienza specifica','Da valutare'];
+
+window.openCustomer=id=>{
+  if(!isAdmin())return toast('Funzione riservata al titolare o vice amministratore');
+  const c=state.customers.find(x=>x.id===id)||{};const em=state.profiles.filter(p=>p.role==='dipendente'&&p.active);
+  const html=`<div class="data-form-stack">
+    ${formSection('Dati principali','Anagrafica, contatti e indirizzo',`${field('first_name','Nome',c.first_name,'text','required')}${field('last_name','Cognome',c.last_name,'text','required')}${field('phone','Telefono',c.phone,'tel')}${field('email','Email',c.email,'email')}${field('address','Indirizzo',c.address)}${field('postal_code','CAP',c.postal_code)}${field('city','Comune',c.city)}<label>Dipendente assegnato<select name="assigned_employee_id"><option value="">Non assegnato</option>${em.map(p=>`<option value="${p.id}" ${p.id===c.assigned_employee_id?'selected':''}>${esc(p.full_name)}</option>`).join('')}</select></label>`,true)}
+    ${formSection('Emergenza e reperibilità','Referente da contattare in caso di necessità',`${selectField('emergency_contact_type','Tipo contatto di emergenza',emergencyTypes,c.emergency_contact_type)}${field('emergency_contact_name','Nome contatto di emergenza',c.emergency_contact_name||c.emergency_contact)}${field('emergency_contact_phone','Telefono contatto di emergenza',c.emergency_contact_phone,'tel')}${selectField('availability','Disponibilità / reperibilità',availabilityOptions,c.availability)}`)}
+    ${formSection('Note operative','Indicazioni visibili al personale autorizzato',`${areaField('operational_notes','Note operative',c.operational_notes)}`)}
+  </div>`;
+  modal(id?'Modifica cliente':'Nuovo cliente',html,async f=>{const d=Object.fromEntries(f);d.assigned_employee_id=d.assigned_employee_id||null;d.emergency_contact=[d.emergency_contact_name,d.emergency_contact_phone].filter(Boolean).join(' · ')||null;id?await update('customers',id,d):await insert('customers',d)})
+};
+
+window.openDog=id=>{
+  if(!isAdmin())return toast('Funzione riservata al titolare o vice amministratore');
+  const d=state.dogs.find(x=>x.id===id)||{};
+  const html=`<div class="data-form-stack">
+    ${formSection('Identificazione','Dati anagrafici e veterinario',`${field('name','Nome',d.name,'text','required')}<label>Proprietario<select name="customer_id" required><option value="">Seleziona proprietario</option>${state.customers.map(c=>`<option value="${c.id}" ${c.id===d.customer_id?'selected':''}>${esc(c.first_name+' '+c.last_name)}</option>`).join('')}</select></label>${selectField('breed_type','Razza / tipologia',breedTypes,d.breed_type)}${field('breed_detail','Dettaglio razza / tipologia',d.breed_detail||d.breed)}${selectField('size','Taglia',sizeOptions,d.size)}${selectField('age_range','Fascia età',ageOptions,d.age_range)}${field('age_detail','Età precisa',d.age_detail)}${field('weight_detail','Peso indicativo',d.weight_detail)}${selectField('sex','Sesso',sexOptions,d.sex)}${selectField('sterilized','Sterilizzato / castrato',yesNoUnknown,d.sterilized)}${selectField('microchip_status','Microchip',['Presente','Non presente','Non so','Da verificare'],d.microchip_status)}${field('microchip_number','Numero microchip',d.microchip_number||d.microchip)}${selectField('vet_status','Veterinario',vetOptions,d.vet_status)}${field('vet_name','Nome veterinario / clinica',d.vet_name)}${field('vet_phone','Telefono veterinario / clinica',d.vet_phone,'tel')}`,true)}
+    ${formSection('Salute e sicurezza','Vaccinazioni, patologie, allergie e terapie',`${selectField('vaccines','Vaccinazioni',vaccineOptions,d.vaccines)}${selectField('parasites','Antiparassitario',parasiteOptions,d.parasites)}${selectField('illnesses','Patologie note',illnessOptions,d.illnesses)}${areaField('illnesses_detail','Dettaglio patologie',d.illnesses_detail)}${selectField('allergies','Allergie',allergyOptions,d.allergies)}${areaField('allergies_detail','Dettaglio allergie',d.allergies_detail)}${selectField('medicines','Farmaci / terapie',medicineOptions,d.medicines)}${areaField('medicines_detail','Dettaglio farmaci / dosaggio',d.medicines_detail)}${selectField('health_risk','Livello rischio sanitario',riskOptions,d.health_risk)}`)}
+    ${formSection('Alimentazione e routine','Pasti, premi e regole domestiche',`${selectField('food_type','Tipo alimentazione',foodOptions,d.food_type)}${field('food_detail','Marca / alimento / note dieta',d.food_detail)}${selectField('meals','Numero pasti',mealOptions,d.meals)}${field('meal_times','Orari pasti',d.meal_times)}${selectField('treats','Premi alimentari',treatOptions,d.treats)}${areaField('treats_detail','Premi consentiti / vietati',d.treats_detail)}${selectField('home_rules','Regole domestiche',homeRuleOptions,d.home_rules)}${areaField('home_rules_detail','Dettaglio regole domestiche',d.home_rules_detail)}${areaField('routine_notes','Routine quotidiana',d.routine_notes)}`)}
+    ${formSection('Comportamento','Socialità, paure e criticità',`${selectField('character','Carattere generale',characterOptions,d.character)}${selectField('adults','Con adulti',socialOptions,d.adults)}${selectField('children','Con bambini',childrenOptions,d.children)}${selectField('dogs_social','Con altri cani',socialOptions,d.dogs_social)}${selectField('fears','Paure / fobie',fearOptions,d.fears)}${areaField('fears_detail','Dettaglio paure / fobie',d.fears_detail)}${selectField('bite_history','Storico morsi',biteOptions,d.bite_history)}${areaField('bite_history_detail','Dettaglio episodio morso / pinzata',d.bite_history_detail)}${selectField('resource_guarding','Possessività',guardingOptions,d.resource_guarding)}${areaField('resource_guarding_detail','Dettaglio possessività',d.resource_guarding_detail)}${areaField('behavior_notes','Altre note comportamentali',d.behavior_notes)}`)}
+    ${formSection('Passeggiata','Attrezzatura, reazioni e aree da evitare',`${selectField('equipment','Attrezzatura usata',equipmentOptions,d.equipment)}${field('equipment_detail','Dettaglio attrezzatura / taglia',d.equipment_detail)}${selectField('dog_triggers','Reazione ad altri cani',dogTriggerOptions,d.dog_triggers)}${selectField('moving_triggers','Reazione a bici / auto / runner',movingTriggerOptions,d.moving_triggers)}${selectField('avoid_areas','Zone da evitare',avoidOptions,d.avoid_areas)}${areaField('avoid_areas_detail','Dettaglio zone da evitare',d.avoid_areas_detail)}${selectField('off_leash','Libero dal guinzaglio',offLeashOptions,d.off_leash)}${selectField('walk_level','Livello gestione passeggiata',walkLevelOptions,d.walk_level)}`)}
+  </div>`;
+  modal(id?'Modifica cane':'Nuovo cane',html,async f=>{
+    const x=Object.fromEntries(f);
+    x.breed=x.breed_detail||x.breed_type||null;
+    x.microchip=x.microchip_number||x.microchip_status||null;
+    x.feeding_notes=[x.food_type,x.food_detail,x.meals,x.meal_times].filter(Boolean).join(' · ')||null;
+    x.medical_notes=[x.illnesses,x.allergies,x.medicines].filter(Boolean).join(' · ')||null;
+    id?await update('dogs',id,x):await insert('dogs',x)
+  })
+};
+window.openService=(id,seed={})=>{
+  if(!isAdmin())return toast('Funzione riservata al titolare o vice amministratore');
+  const service=state.services.find(item=>item.id===id)||seed||{};const employees=state.profiles.filter(p=>p.role==='dipendente'&&p.active);
+  const initialServiceDays=daysInclusive(service.service_date||localDate(),service.end_date||service.service_date||localDate());
+  const initialServiceVisits=Math.max(1,Number(service.daily_visits||1))*Math.max(1,initialServiceDays);
+  const initialEmployeeUnit=Number(service.employee_unit_compensation||0)>0?Number(service.employee_unit_compensation):Number(service.employee_compensation||0)/initialServiceVisits;
+  const currentType=service.service_type||'Dog Walking';const isCustomType=currentType&&!serviceTypePresets.includes(currentType)||currentType==='Altro servizio';
+  const selectedCustomer=service.customer_id||state.customers[0]?.id||'';const assignedEmployee=service.employee_id||state.customers.find(c=>c.id===selectedCustomer)?.assigned_employee_id||'';
+  modal(id?'Modifica servizio':'Nuovo servizio',`<div class="service-form-sections">
+  <section><h3>Assegnazione</h3><div class="form-grid">
+    <label>Cliente<select id="serviceCustomer" name="customer_id" required><option value="">Seleziona cliente</option>${state.customers.map(c=>`<option value="${c.id}" ${c.id===selectedCustomer?'selected':''}>${esc(c.first_name+' '+c.last_name)}</option>`).join('')}</select></label>
+    <label>Cane<select id="serviceDog" name="dog_id" required><option value="">Seleziona cane</option></select></label>
+    <label>Dipendente<select id="serviceEmployee" name="employee_id" required><option value="">Seleziona dipendente</option>${employees.map(p=>`<option value="${p.id}" ${p.id===assignedEmployee?'selected':''}>${esc(p.full_name)}</option>`).join('')}</select></label>
+    <label>Stato servizio<select name="status"><option value="programmato" ${(service.status||'programmato')==='programmato'?'selected':''}>Programmato</option><option value="in_corso" ${service.status==='in_corso'?'selected':''}>In corso</option><option value="da_verificare" ${service.status==='da_verificare'?'selected':''}>Da verificare</option><option value="chiuso" ${service.status==='chiuso'?'selected':''}>Chiuso</option><option value="annullato" ${service.status==='annullato'?'selected':''}>Annullato</option></select></label>
+  </div></section>
+  <section><h3>Servizio richiesto</h3><div class="form-grid">
+    <label>Tipo servizio<select id="serviceType" name="service_type_choice" required>${serviceTypePresets.map(v=>`<option value="${esc(v)}" ${v===currentType||isCustomType&&v==='Altro servizio'?'selected':''}>${esc(v)}</option>`).join('')}</select></label>
+    <label id="customServiceTypeWrap" class="${isCustomType?'':'hidden'}">Specificare altro servizio<input id="customServiceType" name="service_type_custom" value="${esc(isCustomType&&currentType!=='Altro servizio'?currentType:'')}"></label>
+    <label>Frequenza<select name="frequency">${selectOptions(frequencyPresets,service.frequency||'Una volta')}</select></label>
+    <label>Numero uscite / visite al giorno<select id="serviceDailyVisits" name="daily_visits">${selectOptions(visitPresets,service.daily_visits||1)}</select></label>
+    <label>Data inizio<input id="serviceStartDate" name="service_date" type="date" value="${esc(service.service_date||localDate())}" required></label>
+    <label>Data fine<input id="serviceEndDate" name="end_date" type="date" value="${esc(service.end_date||service.service_date||localDate())}" required></label>
+    <label>Ora indicativa<input name="service_time" type="time" value="${esc(String(service.service_time||'09:00').slice(0,5))}" required></label>
+    <label>Durata uscita / visita<select name="planned_duration_minutes">${selectOptions(durationPresets,service.planned_duration_minutes??30)}</select></label>
+    ${[1,2,3,4].map(n=>`<label class="service-slot service-slot-${n}">Fascia oraria ${n}ª uscita / visita<select name="time_slot_${n}">${selectOptions(timeSlotPresets,service[`time_slot_${n}`]||'')}</select></label>`).join('')}
+  </div></section>
+  <section><h3>Economia</h3><div class="form-grid">
+    <label>Costo singola uscita / prestazione (€)<input id="serviceUnitRate" name="unit_rate" type="number" min="0" step="0.01" value="${Number(service.unit_rate||0)}"></label>
+    <label>Sconto applicato<select id="serviceDiscount" name="discount_rate"><option value="0" ${Number(service.discount_rate||0)===0?'selected':''}>Nessuno sconto</option><option value="5" ${Number(service.discount_rate||0)===5?'selected':''}>Sconto 5%</option><option value="10" ${Number(service.discount_rate||0)===10?'selected':''}>Sconto 10%</option></select></label>
+    <label>Importo cliente (€)<input id="serviceCustomerAmount" name="customer_amount" type="number" min="0" step="0.01" value="${Number(service.customer_amount||0)}" required></label>
+    <label>Compenso dipendente per uscita (€)<input id="serviceEmployeeUnitCompensation" name="employee_unit_compensation" type="number" min="0" step="0.01" value="${initialEmployeeUnit.toFixed(2)}" required></label>
+    <label>Compenso dipendente totale (€)<input id="serviceEmployeeCompensation" name="employee_compensation" type="number" min="0" step="0.01" value="${Number(service.employee_compensation||0).toFixed(2)}" readonly required></label>
+    <label>Modalità pagamento<select id="servicePayment" name="payment_method">${selectOptions(paymentPresets,service.payment_method||'Bonifico')}</select></label>
+    <label id="servicePaymentOtherWrap" class="hidden">Altra modalità pagamento<input name="payment_method_other" value="${esc(service.payment_method_other||'')}"></label>
+    <label>Stato cliente<select name="client_status">${clientStatusPresets.map(v=>`<option ${v===(service.client_status||'Nuovo')?'selected':''}>${v}</option>`).join('')}</select></label>
+    <label>Stato pagamento cliente<select name="customer_payment_status">${paymentStatusPresets.map(v=>`<option value="${v.value}" ${v.value===(service.customer_payment_status||'da_incassare')?'selected':''}>${v.label}</option>`).join('')}</select></label>
+    <div class="service-calc wide"><span>Cliente: tariffa × uscite giornaliere × giorni, meno sconto.<br>Dipendente: compenso per uscita × numero totale uscite.</span><div class="service-calc-values"><strong id="serviceCalcPreview">Cliente 0,00 €</strong><strong id="serviceEmployeeCalcPreview">Dipendente 0,00 €</strong></div></div>
+  </div></section>
+  <section><h3>Organizzazione e autorizzazioni</h3><div class="form-grid">
+    <label>Chiavi affidate?<select id="serviceKeys" name="keys_status">${selectOptions(keysPresets,service.keys_status||'')}</select></label>
+    <label id="serviceKeysModeWrap">Modalità consegna chiavi<select name="keys_mode">${selectOptions(keysModePresets,service.keys_mode||'')}</select></label>
+    <label>Aggiornamenti al proprietario<select name="customer_updates">${selectOptions(updatePresets,service.customer_updates||'Messaggio WhatsApp')}</select></label>
+    <label>Contatto veterinario in emergenza<select name="auth_vet">${selectOptions(authorizationPresets,service.auth_vet||'Solo dopo contatto telefonico')}</select></label>
+    <label>Trasporto in clinica veterinaria<select name="auth_transport">${selectOptions(authorizationPresets,service.auth_transport||'Solo dopo contatto telefonico')}</select></label>
+    <label class="wide">Note operative<textarea name="operational_notes" maxlength="3000">${esc(service.operational_notes||'')}</textarea></label>
+  </div></section></div>`,async formData=>{
+    const payload=Object.fromEntries(formData);payload.service_type=payload.service_type_choice==='Altro servizio'?String(payload.service_type_custom||'').trim():payload.service_type_choice;delete payload.service_type_choice;delete payload.service_type_custom;
+    ['planned_duration_minutes','daily_visits','unit_rate','discount_rate','customer_amount','employee_unit_compensation','employee_compensation'].forEach(k=>payload[k]=Number(payload[k]||0));
+    if(!payload.customer_id||!payload.dog_id||!payload.employee_id)throw Error('Seleziona cliente, cane e dipendente.');if(!payload.service_type)throw Error('Indica il tipo di servizio.');const dog=state.dogs.find(d=>d.id===payload.dog_id);if(!dog||dog.customer_id!==payload.customer_id)throw Error('Il cane selezionato non appartiene al cliente.');if(payload.employee_compensation>payload.customer_amount)throw Error('Il compenso dipendente non può superare l’importo cliente.');if(payload.payment_method!=='Altro')payload.payment_method_other=null;
+    const sourceQuoteId=service.quote_id||null;
+    if(sourceQuoteId)delete payload.quote_id;
+    let savedService;
+    if(id){savedService=await update('dogsitter_services',id,payload)}else{savedService=await insert('dogsitter_services',payload)}
+    if(sourceQuoteId&&!id){
+      const created=Array.isArray(savedService)?savedService[0]:savedService;
+      const patch={status:'accettato'};
+      if(created?.id)patch.converted_service_id=created.id;
+      try{await update('dogsitter_quotes',sourceQuoteId,patch)}catch(err){console.warn('Servizio creato, collegamento preventivo non aggiornato:',err.message)}
+    }
+  });
+  const customer=$('#serviceCustomer'),dog=$('#serviceDog'),employee=$('#serviceEmployee');const fillDogs=()=>{const dogs=state.dogs.filter(d=>d.customer_id===customer.value);dog.innerHTML='<option value="">Seleziona cane</option>'+dogs.map(d=>`<option value="${d.id}" ${d.id===service.dog_id?'selected':''}>${esc(d.name)}</option>`).join('');if(!id&&dogs.length===1)dog.value=dogs[0].id;const assigned=state.customers.find(c=>c.id===customer.value)?.assigned_employee_id;if(!id&&assigned&&employees.some(p=>p.id===assigned))employee.value=assigned};customer.onchange=fillDogs;fillDogs();
+  const toggleCustom=()=>{const on=$('#serviceType').value==='Altro servizio';$('#customServiceTypeWrap').classList.toggle('hidden',!on);$('#customServiceType').required=on};$('#serviceType').onchange=toggleCustom;toggleCustom();
+  const toggleSlots=()=>{const n=Number($('#serviceDailyVisits').value||1);for(let i=1;i<=4;i++)document.querySelector(`.service-slot-${i}`)?.classList.toggle('hidden',i>n);calcService()};$('#serviceDailyVisits').onchange=toggleSlots;
+  const calcService=()=>{const rate=Number($('#serviceUnitRate').value||0),visits=Math.max(1,Number($('#serviceDailyVisits').value||1)),days=Math.max(1,daysInclusive($('#serviceStartDate').value,$('#serviceEndDate').value)),discount=Number($('#serviceDiscount').value||0),totalOutings=visits*days,customerTotal=rate*totalOutings*(1-discount/100),employeeUnit=Number($('#serviceEmployeeUnitCompensation').value||0),employeeTotal=employeeUnit*totalOutings;$('#serviceCalcPreview').textContent=`Cliente ${money(customerTotal)}`;$('#serviceEmployeeCalcPreview').textContent=`Dipendente ${money(employeeTotal)} · ${totalOutings} ${totalOutings===1?'uscita':'uscite'}`;if(!id||Number($('#serviceCustomerAmount').value||0)===0)$('#serviceCustomerAmount').value=customerTotal.toFixed(2);$('#serviceEmployeeCompensation').value=employeeTotal.toFixed(2)};['serviceUnitRate','serviceEmployeeUnitCompensation','serviceStartDate','serviceEndDate','serviceDiscount'].forEach(fieldId=>$('#'+fieldId).oninput=calcService);toggleSlots();calcService();
+  const toggleKeys=()=>$('#serviceKeysModeWrap').classList.toggle('hidden',!['Sì','Da concordare'].includes($('#serviceKeys').value));$('#serviceKeys').onchange=toggleKeys;toggleKeys();
+  const togglePayment=()=>$('#servicePaymentOtherWrap').classList.toggle('hidden',$('#servicePayment').value!=='Altro');$('#servicePayment').onchange=togglePayment;togglePayment();
+};
+window.openEmployee=id=>{const p=state.profiles.find(x=>x.id===id);if(!p)return;const ownerLocked=p.is_owner&&!isOwner(),code=passCode(p),verifyPayload=`K9PASS|${code}|${p.active?'ATTIVO':'SOSPESO'}`,canResetPassword=!p.is_owner&&(isOwner()||(state.profile?.role==='vice_admin'&&p.role==='dipendente'));modal('Gestisci account',`<div class="account-pass-media"><div class="account-photo-box"><img id="profilePhotoPreview" src="${esc(p.photo_url||identityLogo())}" alt="Foto tesserino"><label class="photo-upload-button">Aggiungi o cambia foto<input id="profilePhotoFile" type="file" accept="image/jpeg,image/png,image/webp" onchange="previewProfilePhoto(event)"></label></div><div class="account-qr-box"><img src="${qrImageUrl(verifyPayload)}" alt="QR tesserino"><span>QR del tesserino</span></div></div><div class="form-grid">${field('full_name','Nome completo',p.full_name,'text','required')}${field('employee_code','Codice',p.employee_code)}${field('qualification','Qualifica',p.qualification)}${field('pass_expires_at','Scadenza pass',p.pass_expires_at||'','date')}<label>Ruolo<select name="role" ${ownerLocked?'disabled':''}><option value="dipendente" ${p.role==='dipendente'?'selected':''}>Dipendente</option><option value="vice_admin" ${p.role==='vice_admin'?'selected':''}>Vice amministratore</option>${p.is_owner?'<option value="owner" selected>Datore di lavoro</option>':''}</select></label><label>Stato<select name="active" ${ownerLocked?'disabled':''}><option value="true" ${p.active?'selected':''}>Attivo</option><option value="false" ${!p.active?'selected':''}>Sospeso</option></select></label></div>${canResetPassword?`<div class="settings-block"><h3>Credenziali di accesso</h3><p class="muted">Email e password sono gestite dall'amministrazione. L'utente non può modificarle dall'app.</p><button type="button" onclick="openPasswordReset('${id}')">Imposta nuova password</button></div>`:''}`,async f=>{const x=Object.fromEntries(f);x.active=x.active==='true';if(p.is_owner&&!isOwner())throw Error('Il titolare può essere modificato solo dal titolare.');await rpc('admin_update_profile',{p_user_id:id,p_full_name:x.full_name,p_employee_code:x.employee_code||null,p_qualification:x.qualification||null,p_pass_expires_at:x.pass_expires_at||null,p_role:x.role||p.role,p_active:x.active});const photoFile=$('#profilePhotoFile')?.files?.[0];if(photoFile){const photoUrl=await uploadProfilePhoto(id,photoFile);await rpc('set_profile_photo',{p_user_id:id,p_photo_url:photoUrl})}await loadAll();if(state.profile.id===id)renderPass()})};
+window.openPasswordReset=id=>{const p=state.profiles.find(x=>x.id===id);if(!p)return toast('Utente non trovato');if(p.is_owner)return toast('La password del titolare non può essere modificata da questa funzione');if(state.profile?.role==='vice_admin'&&p.role!=='dipendente')return toast('Il Vice Amministratore può reimpostare solo password dei dipendenti');modal('Imposta nuova password',`<p><b>${esc(p.full_name||p.email)}</b></p><p class="muted">La nuova password sostituirà immediatamente quella precedente.</p><div class="form-grid">${field('password','Nuova password','','password','minlength="8" required')}${field('confirm_password','Conferma password','','password','minlength="8" required')}</div>`,async f=>{const x=Object.fromEntries(f);if(x.password!==x.confirm_password)throw Error('Le password non coincidono');if(String(x.password||'').length<8)throw Error('La password deve contenere almeno 8 caratteri');const r=await invokeHyperHandler({action:'reset_password',user_id:id,password:x.password});toast(r.message||'Password aggiornata')})};
+window.toggleAuditDetails=(id,btn)=>{const e=document.getElementById(id);e.classList.toggle('hidden');btn.textContent=e.classList.contains('hidden')?'Mostra dettagli':'Nascondi dettagli'};
+window.archiveEntity=async(table,id,label)=>{if(!isAdmin())return;if(!confirm(`Eliminare ${label}? Verrà spostato nel Cestino e potrà essere ripristinato.`))return;await rpc('archive_entity',{p_table:table,p_id:id});await loadAll();render(document.querySelector('#nav button.active')?.dataset.screen||'dashboard');toast('Elemento spostato nel Cestino')};
+async function loadTrash(){state.trash=await rpc('list_trash')||[]}
+async function renderTrash(){
+  if(!isAdmin()){show('dashboard');return}
+  await loadTrash();
+  $('#trashList').innerHTML=state.trash.map(x=>`<details class="record-accordion trash-accordion"><summary><div class="record-summary-main"><span class="record-title">${esc(x.label)}</span><small>${esc(x.type_label)} · ${new Date(x.deleted_at).toLocaleString('it-IT')}</small></div><span class="accordion-chevron" aria-hidden="true"></span></summary><article class="record-expanded"><div class="card-actions"><button class="primary" onclick="restoreEntity('${x.table_name}','${x.id}')">Ripristina</button>${isOwner()?`<button class="danger" onclick="purgeEntity('${x.table_name}','${x.id}','${esc(x.label)}')">Elimina definitivamente</button>`:''}</div></article></details>`).join('')||'<div class="card">Il Cestino è vuoto.</div>'
+}
+window.restoreEntity=async(table,id)=>{await rpc('restore_entity',{p_table:table,p_id:id});await renderTrash();toast('Elemento ripristinato')};
+window.purgeEntity=async(table,id,label)=>{if(!confirm(`Eliminare definitivamente ${label}? Questa operazione non può essere annullata.`))return;await rpc('purge_entity',{p_table:table,p_id:id});await renderTrash();toast('Elemento eliminato definitivamente')};
+window.startService=async id=>{if(isEmployee())return toast('Il servizio è disponibile in sola lettura');await rpc('start_my_service',{p_service_id:id});await loadAll();renderServices();toast('Servizio iniziato')};
+window.completeService=id=>{if(isEmployee())return toast('Il servizio è disponibile in sola lettura');return modal('Concludi servizio',`<div class="form-grid"><label class="wide">Rapporto obbligatorio<textarea name="report" required></textarea></label><label class="wide">Anomalie o note<textarea name="incident"></textarea></label></div>`,async f=>rpc('complete_my_service',{p_service_id:id,p_report_text:f.get('report'),p_incident_notes:f.get('incident')||null}))};
+window.viewService=id=>{const s=state.services.find(x=>x.id===id);if(!s)return toast('Servizio non trovato');const total=totalVisits(s),unit=Number(s.employee_unit_compensation||0)||Number(s.employee_compensation||0)/Math.max(1,total);const operational=`<div class="entity-details"><p><span>Cliente</span><strong>${esc(cname(s.customer_id))}</strong></p><p><span>Cane</span><strong>${esc(dname(s.dog_id))}</strong></p><p><span>Tipo servizio</span><strong>${esc(s.service_type||'—')}</strong></p><p><span>Periodo</span><strong>${esc(servicePeriod(s))}</strong></p><p><span>Frequenza</span><strong>${esc(displayValue(s.frequency,'Non indicata'))}</strong></p><p class="wide"><span>Fasce orarie</span><strong>${esc(serviceSlots(s))}</strong></p><p><span>Durata</span><strong>${Number(s.planned_duration_minutes||0)} minuti</strong></p><p><span>Uscite giornaliere</span><strong>${Number(s.daily_visits||1)}</strong></p><p><span>Uscite totali</span><strong>${total}</strong></p><p><span>Stato</span><strong>${esc(statusLabels[s.status]||s.status)}</strong></p><p><span>Chiavi affidate</span><strong>${esc(displayValue(s.keys_status))}</strong></p><p><span>Consegna chiavi</span><strong>${esc(displayValue(s.keys_mode))}</strong></p><p><span>Aggiornamenti proprietario</span><strong>${esc(displayValue(s.customer_updates))}</strong></p><p><span>Contatto veterinario</span><strong>${esc(displayValue(s.auth_vet))}</strong></p><p class="wide"><span>Trasporto in clinica</span><strong>${esc(displayValue(s.auth_transport))}</strong></p><p class="wide"><span>Note operative</span><strong>${esc(s.operational_notes||'Nessuna nota')}</strong></p>${s.report_text?`<p class="wide"><span>Rapporto</span><strong>${esc(s.report_text)}</strong></p>`:''}${s.incident_notes?`<p class="wide"><span>Anomalie</span><strong>${esc(s.incident_notes)}</strong></p>`:''}`;const economics=isAdmin()?`<p><span>Dipendente</span><strong>${esc(pname(s.employee_id))}</strong></p><p><span>Importo cliente</span><strong>${money(s.customer_amount)}</strong></p><p><span>Compenso per uscita</span><strong>${money(unit)}</strong></p><p><span>Compenso totale</span><strong>${money(s.employee_compensation)}</strong></p><p><span>Margine attività</span><strong>${money(Number(s.customer_amount||0)-Number(s.employee_compensation||0))}</strong></p>`:`<p><span>Compenso per uscita</span><strong>${money(unit)}</strong></p><p><span>Compenso totale scheda</span><strong>${money(s.employee_compensation)}</strong></p>`;modal('Dettaglio servizio',operational+economics+'</div>',async()=>{});const save=$('#modalSave');if(save)save.classList.add('hidden')};
+window.duplicateService=async id=>{const s=state.services.find(x=>x.id===id);if(!s)return toast('Servizio non trovato');if(!confirm(`Duplicare il servizio del ${dateIT(s.service_date)}? La copia sarà salvata come Programmato.`))return;const payload={customer_id:s.customer_id,dog_id:s.dog_id,employee_id:s.employee_id,service_type:s.service_type,service_date:s.service_date,service_time:String(s.service_time||'').slice(0,5),planned_duration_minutes:Number(s.planned_duration_minutes||30),daily_visits:Number(s.daily_visits||1),customer_amount:Number(s.customer_amount||0),employee_unit_compensation:Number(s.employee_unit_compensation||0),employee_compensation:Number(s.employee_compensation||0),operational_notes:s.operational_notes||null,status:'programmato'};await insert('dogsitter_services',payload);await loadAll();renderServices();toast('Servizio duplicato')};
+window.closeService=async id=>{const s=state.services.find(x=>x.id===id);if(!s)return toast('Servizio non trovato');if(!confirm('Chiudere questo servizio? Diventerà maturato per Economia e compensi. I PDF potranno essere generati dalla scheda chiusa.'))return;await update('dogsitter_services',id,{status:'chiuso',completed_at:s.completed_at||new Date().toISOString()});await loadAll();renderServices();toast('Servizio chiuso')};
+function pdfByte(code){
+  const map={8364:128,8218:130,402:131,8222:132,8230:133,8224:134,8225:135,710:136,8240:137,352:138,8249:139,338:140,381:142,8216:145,8217:146,8220:147,8221:148,8226:149,8211:150,8212:151,732:152,8482:153,353:154,8250:155,339:156,382:158,376:159};
+  return code<=255?code:(map[code]||63)
+}
+function pdfEscape(s){let out='';for(const ch of String(s??'')){const b=pdfByte(ch.codePointAt(0));if(b===40||b===41||b===92)out+='\\'+String.fromCharCode(b);else if(b<32||b>126)out+='\\'+b.toString(8).padStart(3,'0');else out+=String.fromCharCode(b)}return out}
+function pdfMoney(n){return `EUR ${Number(n||0).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})}`}
+function hexRgb(hex,fallback='#0f5f53'){const h=/^#[0-9a-f]{6}$/i.test(hex||'')?hex:fallback;return [parseInt(h.slice(1,3),16)/255,parseInt(h.slice(3,5),16)/255,parseInt(h.slice(5,7),16)/255]}
+function tint(rgb,amount=.88){return rgb.map(v=>v+(1-v)*amount)}
+function darken(rgb,amount=.25){return rgb.map(v=>Math.max(0,v*(1-amount)))}
+function pdfNum(n){return Number(n).toFixed(3).replace(/0+$/,'').replace(/\.$/,'')}
+function rgbCmd(rgb,stroke=false){return `${rgb.map(pdfNum).join(' ')} ${stroke?'RG':'rg'}\n`}
+function wrapPdfText(text,maxChars=66){const paragraphs=String(text||'').split(/\n+/),result=[];for(const paragraph of paragraphs){const words=paragraph.trim().split(/\s+/).filter(Boolean);if(!words.length){result.push('');continue}let line='';for(const word of words){const test=line?`${line} ${word}`:word;if(test.length>maxChars&&line){result.push(line);line=word}else line=test}if(line)result.push(line)}return result}
+function buildStyledPdf(data,kind='customer'){
+  const st=state.settings||DEFAULT_SETTINGS;
+  const primary=hexRgb(st.primary_color),secondary=hexRgb(st.secondary_color,'#153e75');
+  const primaryLight=tint(primary,.89),secondaryLight=tint(secondary,.90),gray=[.32,.36,.40],light=[.965,.972,.978],white=[1,1,1],dangerLight=[1,.94,.91],danger=[.70,.20,.08];
+  const pageW=595,pageH=842,margin=38,contentW=pageW-margin*2;
+  const pages=[];let ops=[],y=pageH-margin;
+  const addPage=()=>{if(ops.length)pages.push(ops.join(''));ops=[];y=pageH-margin};
+  const text=(value,x,yy,size=10,font='F1',color=gray)=>{ops.push(rgbCmd(color),`BT /${font} ${size} Tf 1 0 0 1 ${pdfNum(x)} ${pdfNum(yy)} Tm (${pdfEscape(value)}) Tj ET\n`)};
+  const rect=(x,yy,w,h,fill,stroke=null,radius=0)=>{void radius;ops.push(rgbCmd(fill),`${pdfNum(x)} ${pdfNum(yy)} ${pdfNum(w)} ${pdfNum(h)} re f\n`);if(stroke)ops.push(rgbCmd(stroke,true),`${pdfNum(x)} ${pdfNum(yy)} ${pdfNum(w)} ${pdfNum(h)} re S\n`)};
+  const line=(x1,y1,x2,y2,color=[.82,.84,.86],width=.7)=>ops.push(rgbCmd(color,true),`${width} w ${pdfNum(x1)} ${pdfNum(y1)} m ${pdfNum(x2)} ${pdfNum(y2)} l S\n`);
+  const ensure=(height)=>{if(y-height<54){addPage();drawHeader(false)}};
+  const blockTitle=(title,color=primary)=>{ensure(34);rect(margin,y-27,contentW,27,color);text(title.toUpperCase(),margin+12,y-18,10,'F2',white);y-=34};
+  const infoGrid=(items,accent=primaryLight)=>{const rowH=44,cols=2,w=(contentW-8)/2;for(let i=0;i<items.length;i+=2){ensure(rowH+8);for(let c=0;c<2;c++){const item=items[i+c];if(!item)continue;const x=margin+c*(w+8);rect(x,y-rowH,w,rowH,accent);text(item[0],x+10,y-15,7.5,'F2',darken(primary,.1));text(String(item[1]??'—'),x+10,y-32,10,'F1',[.12,.15,.18])}y-=rowH+8}};
+  const paragraphBlock=(titleText,body,accent=secondaryLight)=>{const lines=wrapPdfText(body||'Nessuna nota inserita.',76);const h=34+lines.length*13+10;ensure(h+8);rect(margin,y-h,contentW,h,accent);text(titleText.toUpperCase(),margin+12,y-18,8,'F2',darken(secondary,.12));let ty=y-37;for(const l of lines){text(l,margin+12,ty,9,'F1',[.14,.17,.20]);ty-=13}y-=h+8};
+  const drawHeader=(first=true)=>{const title=kind==='employee'?'PROSPETTO COMPENSO DIPENDENTE':'RAPPORTO SERVIZIO CLIENTE';rect(0,pageH-112,pageW,112,primary);rect(0,pageH-118,pageW,6,secondary);text(st.organization_name||DEFAULT_SETTINGS.organization_name,margin,pageH-47,18,'F2',white);if(st.subtitle)text(st.subtitle,margin,pageH-66,9,'F1',primaryLight);text(title,margin,pageH-91,11,'F2',white);const badge=kind==='employee'?'USO INTERNO':'DOCUMENTO CLIENTE';rect(pageW-margin-120,pageH-94,120,27,secondary);text(badge,pageW-margin-108,pageH-84,8,'F2',white);y=pageH-140;if(!first){text('Continuazione documento',margin,y,8,'F3',gray);y-=22}};
+  drawHeader(true);
+  const docNo=data.document_number||`K9-${String(data.id||data.service_id||'').slice(0,8).toUpperCase()}`;
+  infoGrid([['NUMERO DOCUMENTO',docNo],['DATA EMISSIONE',new Date().toLocaleDateString('it-IT')]],light);
+  blockTitle('Anagrafica e servizio');
+  infoGrid([['CLIENTE',data.customer_name||'—'],['CANE',data.dog_name||'—'],['TIPO SERVIZIO',data.service_type||'—'],['DATA E ORA',`${dateIT(data.service_date)} - ${String(data.service_time||'').slice(0,5)||'—'}`],['USCITE PREVISTE',data.daily_visits||1],['OPERATORE',data.employee_name||'—']],primaryLight);
+  blockTitle('Svolgimento',secondary);
+  infoGrid([['INIZIO EFFETTIVO',data.started_at?new Date(data.started_at).toLocaleString('it-IT'):'—'],['FINE EFFETTIVA',data.completed_at?new Date(data.completed_at).toLocaleString('it-IT'):'—']],secondaryLight);
+  paragraphBlock('Rapporto del servizio',data.report_text,light);
+  if(data.incident_notes)paragraphBlock('Anomalie e note',data.incident_notes,dangerLight);
+  if(kind==='customer'){
+    blockTitle('Riepilogo economico cliente',primary);
+    ensure(78);rect(margin,y-68,contentW,68,primaryLight);text('TOTALE SERVIZI',margin+16,y-23,9,'F2',darken(primary,.15));text(pdfMoney(data.customer_amount),margin+16,y-51,22,'F2',primary);y-=78;
+    ensure(24);text('Documento cliente: compensi del dipendente e margini interni non sono inclusi.',margin,y-8,7.5,'F3',gray);y-=24;
+  }else{
+    blockTitle('Riepilogo compenso dipendente',secondary);
+    ensure(102);rect(margin,y-92,contentW,92,secondaryLight);text('COMPENSO DELLA SCHEDA',margin+16,y-24,9,'F2',darken(secondary,.12));text(pdfMoney(data.employee_compensation),margin+16,y-57,24,'F2',secondary);text(`${Number(data.daily_visits||1)} ${Number(data.daily_visits||1)===1?'uscita':'uscite'} - Stato: ${data.employee_payment_status||'da_liquidare'}`,margin+16,y-78,9,'F1',gray);y-=102;
+    ensure(24);text('Documento interno: importo cliente e margine aziendale non sono inclusi.',margin,y-8,7.5,'F3',gray);y-=24;
+  }
+  if(st.show_signatures_pdf){ensure(72);line(margin,y-4,margin+210,y-4);line(pageW-margin-210,y-4,pageW-margin,y-4);text(kind==='customer'?'Firma / accettazione cliente':'Firma dipendente',margin,y-22,8,'F1',gray);text('Approvazione responsabile',pageW-margin-210,y-22,8,'F1',gray);y-=52}
+  if(data.approver_name&&y>48){text(`Approvato da ${data.approver_name}${data.approved_at?' il '+new Date(data.approved_at).toLocaleString('it-IT'):''}`,margin,46,7.5,'F3',gray)}
+  if(st.show_footer_pdf&&(st.footer_text||st.legal_text)){line(margin,35,pageW-margin,35);const footer=wrapPdfText([st.footer_text,st.legal_text].filter(Boolean).join(' - '),105)[0]||'';text(footer,margin,22,6.7,'F1',gray)}
+  addPage();
+  const objs=[];const kids=[];let obj=1;const catalog=obj++,pagesObj=obj++,fontRegular=obj++,fontBold=obj++,fontItalic=obj++;
+  const pageDefs=[];for(const stream of pages){const pageObj=obj++,contentObj=obj++;kids.push(`${pageObj} 0 R`);pageDefs.push({pageObj,contentObj,stream})}
+  objs[catalog]=`<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;
+  objs[pagesObj]=`<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${pages.length} >>`;
+  objs[fontRegular]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+  objs[fontBold]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+  objs[fontItalic]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /Encoding /WinAnsiEncoding >>';
+  for(const p of pageDefs){objs[p.pageObj]=`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /Font << /F1 ${fontRegular} 0 R /F2 ${fontBold} 0 R /F3 ${fontItalic} 0 R >> >> /Contents ${p.contentObj} 0 R >>`;objs[p.contentObj]=`<< /Length ${p.stream.length} >>\nstream\n${p.stream}\nendstream`}
+  let pdf='%PDF-1.4\n%K9PDF\n',offsets=[0];for(let i=1;i<objs.length;i++){offsets[i]=pdf.length;pdf+=`${i} 0 obj\n${objs[i]}\nendobj\n`}const xref=pdf.length;pdf+=`xref\n0 ${objs.length}\n0000000000 65535 f \n`;for(let i=1;i<objs.length;i++)pdf+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';pdf+=`trailer\n<< /Size ${objs.length} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return new Blob([pdf],{type:'application/pdf'})
+}
+function servicePdfData(service,extra={}){const docNumber=extra.document_number||(extra.progressive?`${String(extra.progressive).padStart(3,'0')} · V${Number(extra.version||1)}`:`K9-${service.service_date?.replaceAll('-','')||''}-${String(service.id).slice(0,6).toUpperCase()}`);return {...service,...extra,id:service.id,service_id:service.id,customer_name:extra.customer_name||cname(service.customer_id),dog_name:extra.dog_name||dname(service.dog_id),employee_name:extra.employee_name||pname(service.employee_id),document_number:docNumber}}
+function downloadBlob(blob,fileName){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=fileName;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500)}
+async function makePassPdf(){
+  if(!window.K9PdfEngine?.createPassPdf)throw Error('Motore PDF del pass non disponibile');
+  const p=state.profile,code=passCode(p),verifyPayload=`K9PASS|${code}|${p.active?'ATTIVO':'SOSPESO'}`;
+  return window.K9PdfEngine.createPassPdf({
+    full_name:p.full_name||p.email,
+    email:p.email,
+    qualification:p.qualification||roleLabels[p.role]||p.role,
+    role_label:roleLabels[p.role]||p.role,
+    code,
+    issued:passIssued(p),
+    validity:passValidity(p),
+    active:!!p.active,
+    photo_url:p.photo_url||identityLogo()
+  },state.settings||DEFAULT_SETTINGS,identityLogo(),qrImageUrl(verifyPayload));
+}
+window.downloadPassPdf=async()=>{if(!isAdmin())return toast('Funzione non disponibile per il dipendente');try{const blob=await makePassPdf(),name=`pass-${passCode(state.profile).toLowerCase()}.pdf`;downloadBlob(blob,name);toast('Pass identificativo scaricato in formato tessera')}catch(e){console.error(e);toast(e.message||'Impossibile creare il PDF del pass')}};
+window.sharePassPdf=async()=>{if(!isAdmin())return toast('Funzione non disponibile per il dipendente');try{const blob=await makePassPdf(),file=new File([blob],`pass-${passCode(state.profile).toLowerCase()}.pdf`,{type:'application/pdf'});if(navigator.canShare?.({files:[file]}))await navigator.share({title:'Pass identificativo K9',files:[file]});else{downloadBlob(blob,file.name);toast('Condivisione file non disponibile: pass scaricato')}}catch(e){if(e.name!=='AbortError'){console.error(e);toast(e.message||'Condivisione non disponibile')}}};
+
+async function createAccount(){modal('Nuovo account',`<div class="form-grid">${field('email','Email','','email','required')}${field('password','Password temporanea','','password','minlength="8" required')}${field('full_name','Nome completo','','text','required')}${field('employee_code','Codice dipendente')}<label>Ruolo<select name="role"><option value="dipendente">Dipendente</option>${isOwner()?'<option value="vice_admin">Vice amministratore</option>':''}</select></label></div>`,async f=>{const body={action:'create_user',...Object.fromEntries(f)};const r=await invokeHyperHandler(body);toast(r.message||'Account creato')})}
+
+
+/* Release 6.7.1 — ripristino affidabile dei comandi nelle schede espandibili */
+function stabilizeAccordionCommands(root=document){
+  root.querySelectorAll('.record-accordion button, .entity-accordion button, .account-row button, .account-group button').forEach(button=>{
+    button.type='button';
+    button.style.pointerEvents='auto';
+  });
+}
+
+document.addEventListener('click',event=>{
+  const button=event.target.closest('.record-accordion button[onclick], .entity-accordion button[onclick], .account-row button[onclick], .account-group button[onclick]');
+  if(!button)return;
+  const command=button.getAttribute('onclick');
+  if(!command)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  try{
+    const result=Function(`"use strict"; return (async()=>{${command}})();`).call(button);
+    Promise.resolve(result).catch(error=>{
+      console.error('Errore comando scheda espandibile:',error);
+      toast(error?.message||'Comando non eseguito.');
+    });
+  }catch(error){
+    console.error('Errore comando scheda espandibile:',error);
+    toast(error?.message||'Comando non eseguito.');
+  }
+},true);
+
+const accordionCommandObserver=new MutationObserver(records=>{
+  for(const record of records){
+    for(const node of record.addedNodes){
+      if(node.nodeType===1)stabilizeAccordionCommands(node);
+    }
+  }
+});
+accordionCommandObserver.observe(document.documentElement,{childList:true,subtree:true});
+addEventListener('DOMContentLoaded',()=>stabilizeAccordionCommands());
+$('#loginForm').addEventListener('submit',async e=>{e.preventDefault();$('#authError').textContent='';try{if(!configured())throw Error('Configura config.js.');await login($('#loginEmail').value.trim(),$('#loginPassword').value)}catch(err){$('#authError').textContent=err.message}});
+$('#logoutBtn').onclick=logout;$('#nav').onclick=e=>{const b=e.target.closest('[data-screen]');if(b)show(b.dataset.screen)};
+$('[data-action="new-customer"]').onclick=()=>isAdmin()?openCustomer():toast('Funzione non disponibile per il dipendente');$('[data-action="new-dog"]').onclick=()=>isAdmin()?openDog():toast('Funzione non disponibile per il dipendente');$('[data-action="new-service"]').onclick=()=>isAdmin()?openService():toast('Funzione non disponibile per il dipendente');$('[data-action="new-employee"]').onclick=()=>isAdmin()?createAccount():toast('Funzione non disponibile per il dipendente');
+$('#serviceDateFilter').onchange=renderServices;$('#serviceStatusFilter').onchange=renderServices;$('#clearFilters').onclick=()=>{if(!isAdmin())return toast('Funzione non disponibile per il dipendente');$('#serviceDateFilter').value='';$('#serviceStatusFilter').value='';renderServices()};
+if('serviceWorker'in navigator)addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
+restore();
