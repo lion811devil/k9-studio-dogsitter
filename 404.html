@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>K9 Studio Dogsitter</title>
+</head>
+<body>
+<script>
+(function(){
+  var parts=location.pathname.split('/').filter(Boolean);
+  var base='/'+(parts[0]||'')+'/';
+  location.replace(base+location.search+location.hash);
+})();
+</script>
+</body>
+</html>
