@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0f5f53">
+  <title>Aggiornamento K9 Studio Dogsitter</title>
+  <style>
+    body{font-family:system-ui,sans-serif;background:#f4f7fb;color:#17212b;display:grid;place-items:center;min-height:100vh;margin:0;padding:20px}
+    main{max-width:520px;background:#fff;border:1px solid #dbe2e8;border-radius:20px;padding:28px;box-shadow:0 12px 40px #0001;text-align:center}
+    button{border:0;border-radius:12px;background:#0f6b5b;color:#fff;padding:14px 20px;font-size:17px;width:100%}
+    #status{margin:18px 0;line-height:1.5}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Aggiornamento applicazione</h1>
+  <p id="status">Rimozione della vecchia cache in corso…</p>
+  <button id="retry" hidden>Riprova</button>
+</main>
+<script>
+(async function(){
+  const status=document.getElementById('status');
+  const retry=document.getElementById('retry');
+  try{
+    if('serviceWorker' in navigator){
+      const registrations=await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map(registration=>registration.unregister()));
+    }
+    if('caches' in window){
+      const keys=await caches.keys();
+      await Promise.all(keys.map(key=>caches.delete(key)));
+    }
+    localStorage.removeItem('k9-sw-reloaded-12.8.5');
+    sessionStorage.clear();
+    status.textContent='Cache eliminata. Apertura della versione aggiornata…';
+    setTimeout(()=>location.replace('./index.html?build=12.8.5&ts='+Date.now()),800);
+  }catch(error){
+    status.textContent='Non è stato possibile completare automaticamente la pulizia. Premi Riprova.';
+    retry.hidden=false;
+    retry.onclick=()=>location.reload();
+  }
+})();
+</script>
+</body>
+</html>
