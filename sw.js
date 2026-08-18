@@ -1,5 +1,5 @@
-// K9 Studio Dogsitter 12.9.17 — Service Worker stabile
-const K9_SW_VERSION='12.9.17';
+// K9 Studio Dogsitter 12.9.18 — Service Worker stabile
+const K9_SW_VERSION='12.9.18';
 self.addEventListener('install',()=>self.skipWaiting());
 self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
 self.addEventListener('fetch',()=>{});
