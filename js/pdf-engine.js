@@ -468,41 +468,88 @@
     return Object.fromEntries(allowed.filter(key=>Object.prototype.hasOwnProperty.call(input,key)).map(key=>[key,input[key]]));
   }
 
+  // Quote-only layout: compact blocks, real measured pagination, no changes to other PDFs.
   async function createQuotePdf(input,settings,logoUrl){
-    const data=sanitizeQuoteData(input);
-    const primary=normalizeHex(settings.primary_color,'#0f5f53');
-    const secondary=normalizeHex(settings.secondary_color,'#153e75');
-    const logo=await loadImage(logoUrl);
-    const pages=[newPage()];let page=pages[0];
-    const drawQuoteHeader=()=>{
-      const {ctx}=page;if(settings.show_header_pdf===false){page.y=PAGE_MARGIN;return;}roundedRect(ctx,PAGE_MARGIN,PAGE_MARGIN,A4.width-PAGE_MARGIN*2,245,28,primary);
-      if(logo&&settings.show_logo_pdf!==false){const ratio=Math.min(180/logo.width,150/logo.height),w=logo.width*ratio,h=logo.height*ratio;roundedRect(ctx,PAGE_MARGIN+28,PAGE_MARGIN+34,210,176,20,'#ffffff');ctx.drawImage(logo,PAGE_MARGIN+43+(180-w)/2,PAGE_MARGIN+47+(150-h)/2,w,h)}
-      const tx=logo&&settings.show_logo_pdf!==false?PAGE_MARGIN+270:PAGE_MARGIN+42;
-      drawText(ctx,settings.organization_name||'K9 Napoletano Academy',tx,PAGE_MARGIN+62,{font:'34px Arial',color:'#ffffff',bold:true,maxWidth:690,lineHeight:40});
-      if(settings.subtitle)drawText(ctx,settings.subtitle,tx,PAGE_MARGIN+96,{font:'18px Arial',color:'#e6f3f4',maxWidth:690,lineHeight:23});
-      drawText(ctx,'PREVENTIVO SERVIZI',tx,PAGE_MARGIN+126,{font:'25px Arial',color:lighten(primary,.82),bold:true});
-      drawText(ctx,`Preventivo ${data.progressive?String(data.progressive).padStart(3,'0'):'—'}  •  Versione V${Number(data.version||1)}`,tx,PAGE_MARGIN+174,{font:'21px Arial',color:'#ffffff'});
-      roundedRect(ctx,A4.width-PAGE_MARGIN-246,PAGE_MARGIN+42,210,72,18,secondary);drawText(ctx,dateIT(data.quote_date),A4.width-PAGE_MARGIN-220,PAGE_MARGIN+88,{font:'27px Arial',color:'#ffffff',bold:true});page.y=PAGE_MARGIN+280;
+    const data=sanitizeQuoteData(input),primary=normalizeHex(settings.primary_color,'#0f5f53'),secondary=normalizeHex(settings.secondary_color,'#153e75');
+    const logo=await loadImage(logoUrl),pages=[];
+    const x=PAGE_MARGIN,w=A4.width-2*x,gap=12,limit=A4.height-(settings.show_footer_pdf===false?72:145);
+    let page;
+    const start=()=>{
+      page=newPage();pages.push(page);
+      if(settings.show_header_pdf===false)return;
+      const ctx=page.ctx,hasLogo=logo&&settings.show_logo_pdf!==false;
+      const tx=x+(hasLogo?120:0),tw=w-(hasLogo?120:0);
+      if(hasLogo){const ratio=Math.min(98/logo.width,94/logo.height),lw=logo.width*ratio,lh=logo.height*ratio;ctx.drawImage(logo,x+(98-lw)/2,x+(94-lh)/2,lw,lh);}
+      const org=String(settings.organization_name||'K9 Napoletano Academy');
+      const orgLines=wrap(org,tw,'700 24px Arial');let yy=x+24;
+      for(const line of orgLines){drawText(ctx,line,tx,yy,{font:'24px Arial',bold:true,color:primary});yy+=27;}
+      drawText(ctx,'Preventivo servizi',tx,yy+12,{font:'42px Arial',bold:true,color:'#172d30'});
+      drawText(ctx,`N. ${data.progressive?String(data.progressive).padStart(3,'0'):'—'}  ·  V${Number(data.version||1)}  ·  Emesso il ${dateIT(data.quote_date)}`,tx,yy+47,{font:'21px Arial',color:'#52636b'});
+      yy+=65;
+      if(settings.subtitle){for(const line of wrap(settings.subtitle,tw,'20px Arial')){drawText(ctx,line,tx,yy,{font:'20px Arial',color:'#52636b'});yy+=24;}}
+      ctx.fillStyle=primary;ctx.fillRect(x,yy+6,w,4);page.y=yy+26;page.contentStart=page.y;
     };
-    drawQuoteHeader();const x=PAGE_MARGIN,w=A4.width-PAGE_MARGIN*2,gap=24;
-    const footerReserve=settings.show_footer_pdf===false?70:190;const ensure=height=>{if(page.y+height>A4.height-footerReserve){page=newPage();pages.push(page);drawQuoteHeader()}};
-    ensure(260);page.y=drawSection(page.ctx,'Cliente',[{label:'Nome e cognome',value:data.customer_name||'—'},{label:'Animale',value:data.dog_name||'Nessun animale associato'},{label:'Telefono',value:data.customer_phone||''},{label:'Email',value:data.customer_email||''},{label:'Indirizzo',value:data.customer_address||''}],x,page.y,w,primary,lighten(primary,.93))+gap;const company=businessRows(settings);if(company.length){ensure(170+company.length*58);page.y=drawSection(page.ctx,'Dati attività',company,x,page.y,w,secondary,lighten(secondary,.96))+gap;}
-    const quotePeriods=Array.isArray(data.periods)&&data.periods.length?data.periods:[];
-    const items=Array.isArray(data.items)?data.items:[];
-    const quoteUnitPrice=Number(items[0]?.unit_price||0);
-    const quotePeriodVisits=p=>{const a=new Date(String(p.start_date||'')+'T00:00:00'),b=new Date(String(p.end_date||p.start_date||'')+'T00:00:00');const days=Number.isNaN(a.getTime())||Number.isNaN(b.getTime())?1:Math.max(1,Math.round((b-a)/86400000)+1);return days*Math.max(1,Number(p.daily_visits||1))};
-    if(quotePeriods.length){ensure(170+quotePeriods.length*70);const hourly=data.billing_mode==='ora',hours=Math.max(0,Number(data.planned_duration_minutes||0))/60;const periodAmount=p=>quotePeriodVisits(p)*quoteUnitPrice*(hourly?hours:1);const rows=quotePeriods.map((p,i)=>{const outings=quotePeriodVisits(p);return {label:`Periodo ${i+1}`,value:hourly?`${dateIT(p.start_date)}${p.end_date&&p.end_date!==p.start_date?' - '+dateIT(p.end_date):''} · ${outings} prestazioni · ${String(hours).replace('.',',')} ore × ${money(quoteUnitPrice)}/ora · Totale ${money(periodAmount(p))}`:`${dateIT(p.start_date)}${p.end_date&&p.end_date!==p.start_date?' - '+dateIT(p.end_date):''} · ${outings} uscite · ${money(quoteUnitPrice)}/uscita · Totale ${money(periodAmount(p))}`}});rows.push({label:'Somma periodi',value:money(quotePeriods.reduce((sum,p)=>sum+periodAmount(p),0))});page.y=drawSection(page.ctx,'Periodi e riepilogo economico',rows,x,page.y,w,secondary,lighten(secondary,.95))+gap;}
-    ensure(180+items.length*58);roundedRect(page.ctx,x,page.y,w,105+items.length*58,22,lighten(secondary,.95),'#dfe7ec');roundedRect(page.ctx,x,page.y,12,105+items.length*58,8,secondary);drawText(page.ctx,'SERVIZI PREVISTI',x+32,page.y+48,{font:'25px Arial',color:darken(secondary,.18),bold:true});let cy=page.y+94;
-    for(const item of items){drawText(page.ctx,item.description||'Servizio',x+32,cy,{font:'23px Arial',color:'#263640',bold:true,maxWidth:520,lineHeight:29});drawText(page.ctx,`${Number(item.quantity||0)} × ${money(item.unit_price)}`,x+w-330,cy,{font:'22px Arial',color:'#65747e'});drawText(page.ctx,money(Number(item.quantity||0)*Number(item.unit_price||0)),x+w-155,cy,{font:'23px Arial',color:secondary,bold:true});cy+=58}page.y+=129+items.length*58;
-    ensure(180);roundedRect(page.ctx,x,page.y,w,150,24,lighten(primary,.90),primary);drawText(page.ctx,'TOTALE PREVENTIVO',x+34,page.y+50,{font:'25px Arial',color:darken(primary,.18),bold:true});drawText(page.ctx,money(data.total_amount),x+34,page.y+112,{font:'46px Arial',color:primary,bold:true});drawText(page.ctx,`Valido fino al ${dateIT(data.valid_until)}`,x+w-355,page.y+104,{font:'24px Arial',color:'#43515a',bold:true});page.y+=174;
-    if(data.payment_status==='Acconto ricevuto'&&Number(data.deposit_amount||0)>0){ensure(220);page.y=drawSection(page.ctx,'Acconto ricevuto',[{label:'Importo acconto',value:money(data.deposit_amount)},{label:'Data ricezione',value:dateIT(data.deposit_received_at)},{label:'Modalità',value:data.deposit_payment_method||'—'},{label:'Residuo da pagare',value:money(data.balance_due??Math.max(0,Number(data.total_amount||0)-Number(data.deposit_amount||0)))},{label:'Riferimento / nota',value:data.deposit_reference||'—'}],x,page.y,w,'#b56a12','#fff6e8')+gap}
-    if(data.payment_terms){ensure(170);page.y=drawNarrative(page.ctx,'Modalità di pagamento',data.payment_terms,x,page.y,w,secondary,lighten(secondary,.95))+gap}
-    if(data.notes){ensure(170);page.y=drawNarrative(page.ctx,'Note',data.notes,x,page.y,w,primary,lighten(primary,.96))+gap}
-    if(settings.show_footer_pdf!==false&&settings.legal_text){ensure(190);page.y=drawNarrative(page.ctx,'Note legali e privacy',settings.legal_text,x,page.y,w,secondary,lighten(secondary,.97))+gap;}
-    if(settings.show_signatures_pdf!==false){ensure(220);roundedRect(page.ctx,x,page.y,w,185,22,'#f7fafb','#dfe7ec');drawText(page.ctx,'ACCETTAZIONE DEL CLIENTE',x+32,page.y+48,{font:'24px Arial',color:'#263640',bold:true});drawText(page.ctx,'Data ______________________',x+32,page.y+112,{font:'22px Arial',color:'#43515a'});drawText(page.ctx,'Firma __________________________________________',x+w/2-30,page.y+112,{font:'22px Arial',color:'#43515a'});}
-    const total=pages.length;pages.forEach((pg,i)=>drawFooter(pg,settings,i+1,total));const jpgs=[];for(const pg of pages)jpgs.push(await canvasToJpeg(pg.canvas));return buildImagePdf(jpgs);
+    const ensure=h=>{if(page.y+h>limit&&page.y>(page.contentStart||x))start();};
+    // Split long words as well as ordinary text, so unusually long addresses/notes fit.
+    const wrap=(value,width,font)=>{
+      const ctx=page.ctx;ctx.font=font;const lines=[];
+      for(const p of String(value??'').split(/\n/)){
+        let line='';for(const word of p.split(/\s+/).filter(Boolean)){
+          const candidate=line?line+' '+word:word;
+          if(ctx.measureText(candidate).width<=width){line=candidate;continue;}
+          if(line){lines.push(line);line='';}
+          for(const ch of word){if(line&&ctx.measureText(line+ch).width>width){lines.push(line);line='';}line+=ch;}
+        }lines.push(line);
+      }return lines;
+    };
+    start();
+    const block=(title,rows,accent=secondary)=>{
+      const entries=rows.filter(r=>r.value!==null&&r.value!==undefined&&String(r.value)!=='').flatMap(r=>{
+        const ls=wrap(r.value,w-260,'24px Arial');return ls.map((line,i)=>({label:i?'':r.label||'',line}));
+      });if(!entries.length)return;
+      let idx=0;
+      while(idx<entries.length){
+        const total=43+entries.length*31;
+        if(idx===0&&total<=limit-(page.contentStart||x))ensure(total);
+        else ensure(78);
+        const count=Math.min(entries.length-idx,Math.max(1,Math.floor((limit-page.y-43)/31)));
+        const h=43+count*31,ctx=page.ctx,y=page.y;
+        ctx.fillStyle=lighten(accent,.72);ctx.fillRect(x,y+33,w,2);
+        drawText(ctx,title.toUpperCase()+(idx?' · CONTINUA':''),x,y+25,{font:'22px Arial',bold:true,color:darken(accent,.16)});
+        for(let j=0;j<count;j++){const row=entries[idx+j],yy=y+61+j*31;drawText(ctx,row.label,x,yy,{font:'21px Arial',color:'#52636b'});drawText(ctx,row.line,x+250,yy,{font:'24px Arial',color:'#23313f'});}
+        page.y+=h+gap;idx+=count;if(idx<entries.length)start();
+      }
+    };
+    const narrative=(title,value,accent=secondary)=>{
+      if(!value)return;const lines=wrap(value,w,'23px Arial');let idx=0;
+      while(idx<lines.length){const total=42+lines.length*30;if(idx===0&&total<=limit-(page.contentStart||x))ensure(total);else ensure(73);
+        const count=Math.min(lines.length-idx,Math.max(1,Math.floor((limit-page.y-42)/30))),h=42+count*30,y=page.y,ctx=page.ctx;
+        ctx.fillStyle=lighten(accent,.72);ctx.fillRect(x,y+33,w,2);drawText(ctx,title.toUpperCase()+(idx?' · CONTINUA':''),x,y+25,{font:'22px Arial',bold:true,color:darken(accent,.16)});
+        for(let j=0;j<count;j++)drawText(ctx,lines[idx+j],x,y+60+j*30,{font:'23px Arial',color:'#263640'});
+        page.y+=h+gap;idx+=count;if(idx<lines.length)start();
+      }
+    };
+    block('Cliente',[{label:'Nome e cognome',value:data.customer_name||'—'},{label:'Animale',value:data.dog_name||'Nessun animale associato'},{label:'Telefono',value:data.customer_phone},{label:'Email',value:data.customer_email},{label:'Indirizzo',value:data.customer_address}],primary);
+    const periods=Array.isArray(data.periods)?data.periods:[],items=Array.isArray(data.items)?data.items:[],rate=Number(items[0]?.unit_price||0),hours=Math.max(0,Number(data.planned_duration_minutes||0))/60,hourly=data.billing_mode==='ora';
+    const periodRows=periods.map((p,i)=>{const a=Date.parse(p.start_date+'T00:00:00Z'),b=Date.parse((p.end_date||p.start_date)+'T00:00:00Z'),days=Number.isFinite(a)&&Number.isFinite(b)?Math.max(1,Math.round((b-a)/86400000)+1):1;const visits=days*Math.max(1,Number(p.daily_visits||1)),amount=visits*rate*(hourly?hours:1);const schedule=`${dateIT(p.start_date)}${p.end_date&&p.end_date!==p.start_date?' - '+dateIT(p.end_date):''} · ${visits} ${visits===1?'prestazione':'prestazioni'}`;const redundant=periods.length===1&&items.length===1&&Math.abs(amount-Number(items[0].quantity||0)*rate)<0.005;return {label:`Periodo ${i+1}`,value:redundant?schedule+(hourly?` · ${String(hours).replace('.',',')} ore/prestazione`:''):`${schedule} · ${hourly?`${String(hours).replace('.',',')} ore × `:''}${money(rate)}/${hourly?'ora':'uscita'} · ${money(amount)}`,amount};});
+    if(periodRows.length)block('Programmazione',periodRows);
+    if(items.length)block('Servizi',items.map((it,i)=>({label:items.length===1?'Servizio':`Voce ${i+1}`,value:`${it.description||'Servizio'} · ${Number(it.quantity||0)} × ${money(it.unit_price)} = ${money(Number(it.quantity||0)*Number(it.unit_price||0))}`})));
+    const total=Number(data.total_amount||0),deposit=Number(data.deposit_amount||0),balance=Number(data.balance_due??Math.max(0,total-deposit));
+    const totals=[{label:'Validità',value:dateIT(data.valid_until)}];
+    if(Number(data.discount_amount||0)>0||Number(data.discount_rate||0)>0){totals.splice(0,0,{label:'Subtotale',value:money(data.subtotal)},{label:'Sconto',value:`${Number(data.discount_rate||0)}% · ${money(data.discount_amount)}`});}
+    if(deposit>0)totals.push({label:'Acconto ricevuto',value:money(deposit)},{label:'Data acconto',value:data.deposit_received_at?dateIT(data.deposit_received_at):''},{label:'Modalità acconto',value:data.deposit_payment_method},{label:'Riferimento',value:data.deposit_reference});
+    totals.push({label:'Residuo da pagare',value:money(balance)});
+    if(data.payment_terms)totals.push({label:'Pagamento previsto',value:data.payment_terms});
+    ensure(106);{
+      const ctx=page.ctx,y=page.y;roundedRect(ctx,x,y,w,92,12,lighten(primary,.93));
+      drawText(ctx,'TOTALE PREVENTIVO',x+20,y+35,{font:'22px Arial',bold:true,color:primary});
+      ctx.font='700 47px Arial';const amount=money(total);drawText(ctx,amount,x+w-20-ctx.measureText(amount).width,y+62,{font:'47px Arial',bold:true,color:primary});page.y+=104;
+    }
+    block('Pagamento',totals,primary);
+    const company=businessRows(settings);if(company.length===1&&company[0].label==='Sede'){const lines=wrap('Sede: '+company[0].value,w,'21px Arial');for(const line of lines){ensure(29);drawText(page.ctx,line,x,page.y+22,{font:'21px Arial',color:'#52636b'});page.y+=29;}page.y+=gap;}else if(company.length)block('Riferimenti attività',company);
+    narrative('Note',data.notes,primary);if(settings.show_footer_pdf!==false)narrative('Note legali e privacy',settings.legal_text);
+    const jpgs=[];pages.forEach((pg,i)=>{drawFooter(pg,settings,i+1,pages.length);if(settings.show_footer_pdf!==false){const ctx=pg.ctx;ctx.fillStyle='#ffffff';ctx.fillRect(A4.width-PAGE_MARGIN-350,A4.height-62,350,42);const label=`Preventivo · ${i+1}/${pages.length}`;ctx.font='17px Arial';drawText(ctx,label,A4.width-PAGE_MARGIN-ctx.measureText(label).width,A4.height-37,{font:'17px Arial',color:'#6f7f88'});}});for(const pg of pages)jpgs.push(await canvasToJpeg(pg.canvas));const blob=await buildImagePdf(jpgs);blob.k9QuoteFormTop=page.y*842/A4.height+10;blob.k9QuoteFooter=settings.show_footer_pdf!==false;return blob;
   }
-
 
   async function createReceiptPdf(data,settings,logoUrl,stampUrl){
     const primary=normalizeHex(settings.primary_color,'#0f5f53');
