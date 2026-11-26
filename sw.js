@@ -1,21 +1,22 @@
-// K9 Studio Dogsitter 13.0.0 — Service Worker aggiornamento affidabile
-const K9_SW_VERSION='13.0.0';
+// K9 Studio Dogsitter 13.1.1 — Service Worker aggiornamento affidabile
+const K9_SW_VERSION='13.1.1';
 const CACHE=`k9-studio-${K9_SW_VERSION}`;
 
 const APP_SHELL=[
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/styles.css?v=13.0.0',
-  './js/core.js?v=13.0.0',
-  './js/periods.js?v=13.0.0',
-  './js/calculations.js?v=13.0.0',
-  './js/navigation.js?v=13.0.0',
-  './config.js?v=13.0.0',
-  './js/settings.js?v=13.0.0',
-  './js/pdf-engine.js?v=13.0.0',
-  './js/operations.js?v=13.0.0',
-  './js/app.js?v=13.0.0',
+  './css/styles.css?v=13.1.1',
+  './js/core.js?v=13.1.1',
+  './js/periods.js?v=13.1.1',
+  './js/calculations.js?v=13.1.1',
+  './js/navigation.js?v=13.1.1',
+  './js/fast.js?v=13.1.1',
+  './config.js?v=13.1.1',
+  './js/settings.js?v=13.1.1',
+  './js/pdf-engine.js?v=13.1.1',
+  './js/operations.js?v=13.1.1',
+  './js/app.js?v=13.1.1',
   './assets/logo.png',
   './assets/icon-192.png',
   './assets/icon-512.png'
@@ -65,7 +66,11 @@ self.addEventListener('fetch',event=>{
   const isCode=/\.(?:js|css)$/i.test(url.pathname);
   const isStatic=/\.(?:png|jpg|jpeg|svg|webmanifest)$/i.test(url.pathname);
 
-  // Codice applicativo: rete prima, cache solo come fallback offline.
+  // Versioni esplicite: cache prima per il codice della release corrente.
+  if(isCode&&url.searchParams.get('v')===K9_SW_VERSION){
+    event.respondWith(caches.open(CACHE).then(async c=>{const hit=await c.match(req);if(hit)return hit;const res=await fetch(req);if(res.ok)await c.put(req,res.clone());return res}));
+    return;
+  }
   if(isCode){
     event.respondWith(
       fetch(req,{cache:'no-store'})
