@@ -16,7 +16,7 @@ const periodDays=p=>daysInclusive(p?.start_date,p?.end_date||p?.start_date);
 const periodVisits=p=>Math.max(1,Number(p?.daily_visits||1))*periodDays(p);
 const periodsTotals=periods=>({days:(periods||[]).reduce((a,p)=>a+periodDays(p),0),visits:(periods||[]).reduce((a,p)=>a+periodVisits(p),0)});
 const periodClientTotal=(period,unitPrice)=>periodVisits(period)*Math.max(0,Number(unitPrice||0));
-const quoteUnitPriceOf=quote=>Number((quote?.quote_items||[]).sort((a,b)=>Number(a.position||0)-Number(b.position||0))[0]?.unit_price||0);
+const quoteUnitPriceOf=quote=>Number([...(quote?.quote_items||[])].sort((a,b)=>Number(a.position||0)-Number(b.position||0))[0]?.unit_price||0);
 const serviceOccursOn=(record,date)=>normalizePeriods(record).some(p=>p.start_date<=date&&(p.end_date||p.start_date)>=date);
 const visitsOnDate=(record,date)=>normalizePeriods(record).filter(p=>p.start_date<=date&&(p.end_date||p.start_date)>=date).reduce((sum,p)=>sum+Math.max(1,Number(p.daily_visits||1)),0);
 const serviceFirstDate=record=>normalizePeriods(record).map(p=>p.start_date).filter(Boolean).sort()[0]||record.service_date||record.start_date||'';

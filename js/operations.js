@@ -1,12 +1,12 @@
 'use strict';
 
 const operationsState={calendarMode:'month',calendarAnchor:new Date(),statisticsPeriod:'month'};
-const opDateKey=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const opDateKey=localDate;
 const opStartOfWeek=d=>{const x=new Date(d);const day=(x.getDay()+6)%7;x.setDate(x.getDate()-day);x.setHours(12,0,0,0);return x};
 const opAddDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x};
 const opMonthLabel=d=>d.toLocaleDateString('it-IT',{month:'long',year:'numeric'});
 const opDayLabel=d=>d.toLocaleDateString('it-IT',{weekday:'short',day:'2-digit',month:'short'});
-const opServiceAmount=s=>Number(s.customer_amount||0);
+const opServiceAmount=s=>serviceFinancialData(s).customer_amount;
 const opEmployeeAmount=s=>Number(s.employee_compensation||0);
 const opIsMatured=s=>['da_verificare','chiuso'].includes(s.status);
 const opStatusClass=s=>`calendar-status-${String(s.status||'programmato').replaceAll('_','-')}`;
@@ -16,7 +16,7 @@ const opFirstPeriodStart=s=>serviceFirstDate(s)||'';
 
 function operationalMetrics(){
   const today=localDate();const weekStart=opDateKey(opStartOfWeek(new Date()));const weekEnd=opDateKey(opAddDays(opStartOfWeek(new Date()),6));
-  const activeServices=state.services.filter(opOperationalService);const maturedServices=state.services.filter(s=>s.status!=='annullato'&&opIsMatured(s));
+  const activeServices=state.services.filter(opOperationalService);const maturedServices=state.services.filter(s=>s.status!=='annullato'&&opIsMatured(s)).map(serviceFinancialData);
   return {
     customers:state.customers.filter(c=>c.status==='attivo').length,
     dogs:state.dogs.filter(d=>d.active!==false).length,
@@ -27,8 +27,8 @@ function operationalMetrics(){
     quotesPending:state.quotes.filter(q=>['bozza','inviato'].includes(String(q.status||'').toLowerCase())&&!q.deleted_at).length,
     unread:unreadNotificationCount(),
     toCollect:maturedServices.filter(s=>s.customer_payment_status==='da_incassare').reduce((a,s)=>a+Math.max(0,Number(s.balance_due??opServiceAmount(s))),0),
-    toPay:maturedServices.filter(s=>s.employee_payment_status==='da_liquidare').reduce((a,s)=>a+opEmployeeAmount(s),0),
-    documents:(state.documents||[]).filter(d=>d.status==='generated'&&d.status!=='archived'&&d.is_active!==false&&!!d.storage_path).length,marginMatured:maturedServices.reduce((a,s)=>a+Math.max(0,opServiceAmount(s)-opEmployeeAmount(s)),0)
+    toPay:compensationPeriodRows().filter(x=>x.payment_status==='da_liquidare').reduce((a,x)=>a+x.amount,0),
+    documents:(state.documents||[]).filter(d=>d.status==='generated'&&d.status!=='archived'&&d.is_active!==false&&!!d.storage_path).length,marginMatured:maturedServices.reduce((a,s)=>a+opServiceAmount(s)-opEmployeeAmount(s),0)
   }
 }
 
@@ -38,16 +38,12 @@ function renderOperationalDashboard(){
   const todays=opServicesOn(today).sort((a,b)=>String(a.service_time||'').localeCompare(String(b.service_time||'')));
   const tomorrow=opDateKey(opAddDays(new Date(),1));
   const upcoming=state.services.filter(s=>opOperationalService(s)&&normalizePeriods(s).some(p=>(p.end_date||p.start_date)>=tomorrow)).sort((a,b)=>String(opFirstPeriodStart(a)+(a.service_time||'')).localeCompare(String(opFirstPeriodStart(b)+(b.service_time||'')))).slice(0,6);
-  host.innerHTML=`<div class="page-title operations-title"><div><span class="eyebrow">GESTIONE OPERATIVA</span><h2>Dashboard</h2><p class="muted">Attività, scadenze e dati economici essenziali.</p></div><span class="today-chip">${new Date().toLocaleDateString('it-IT',{weekday:'long',day:'2-digit',month:'long'})}</span></div>
+  host.innerHTML=`<div class="page-title operations-title"><div><span class="eyebrow">GESTIONE OPERATIVA</span><h2>Home</h2><p class="muted">Attività, scadenze e dati economici essenziali.</p></div><span class="today-chip">${new Date().toLocaleDateString('it-IT',{weekday:'long',day:'2-digit',month:'long'})}</span></div>
   <div class="operations-kpi-grid">
-    ${opKpi('Clienti attivi',m.customers,'customers','Anagrafiche disponibili')}
-    ${opKpi('Animali attivi',m.dogs,'dogs','Schede operative')}
     ${opKpi('Servizi oggi',m.today,'services',`${m.week} questa settimana`)}
-    ${opKpi('In corso',m.inProgress,'services','Attività operative')}
     ${opKpi('Da verificare',m.toVerify,'services','Rapporti da controllare')}
     ${opKpi('Preventivi in attesa',m.quotesPending,'quotes','Bozze o inviati')}
     ${opKpi('Notifiche',m.unread,'notifications','Avvisi non letti')}
-    ${opKpi('Documenti attivi',m.documents,'documents','PDF validi disponibili')}
   </div>
   <div class="operations-money-grid">
     <button class="operations-money-card" onclick="show('payments')"><span>Da incassare</span><strong>${money(m.toCollect)}</strong><small>Importi cliente maturati</small></button>
@@ -58,7 +54,7 @@ function renderOperationalDashboard(){
   <section><div class="section-title-row"><div><h3>Prossime attività</h3><p class="muted">I prossimi servizi pianificati.</p></div><button onclick="show('services')">Tutti i servizi</button></div><div class="operations-agenda">${upcoming.map(opAgendaRow).join('')||'<div class="card empty-state"><strong>Nessuna attività futura</strong></div>'}</div></section></div>`;
 }
 function opKpi(label,value,screen,small){return `<button class="operations-kpi" onclick="show('${screen}')"><span>${esc(label)}</span><strong>${value}</strong><small>${esc(small)}</small></button>`}
-function opAgendaRow(s){const first=serviceFirstDate(s);return `<button class="operations-agenda-row" onclick="show('services');setTimeout(()=>openService('${s.id}'),60)"><span class="operations-agenda-time">${esc((s.service_time||'—').slice(0,5))}</span><span><strong>${esc(opServiceTitle(s))}</strong><small>${esc(cname(s.customer_id))} · ${dateIT(first)} · ${esc(statusLabels[s.status]||s.status)}</small></span><span class="status ${opStatusClass(s)}">${esc(statusLabels[s.status]||s.status)}</span></button>`}
+function opAgendaRow(s){const first=serviceFirstDate(s);return `<button class="operations-agenda-row" onclick="show('services');viewService('${s.id}')"><span class="operations-agenda-time">${esc((s.service_time||'—').slice(0,5))}</span><span><strong>${esc(opServiceTitle(s))}</strong><small>${esc(cname(s.customer_id))} · ${dateIT(first)} · ${esc(statusLabels[s.status]||s.status)}</small></span><span class="status ${opStatusClass(s)}">${esc(statusLabels[s.status]||s.status)}</span></button>`}
 
 function renderCalendar(){
   const host=$('#calendarPanel');if(!host)return;
@@ -67,12 +63,12 @@ function renderCalendar(){
   <div class="calendar-toolbar"><div class="calendar-nav"><button onclick="moveOperationsCalendar(-1)">‹</button><button onclick="goOperationsToday()">Oggi</button><button onclick="moveOperationsCalendar(1)">›</button></div><strong>${mode==='month'?opMonthLabel(a):mode==='week'?`${opDayLabel(opStartOfWeek(a))} – ${opDayLabel(opAddDays(opStartOfWeek(a),6))}`:a.toLocaleDateString('it-IT',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})}</strong><div class="calendar-modes"><button class="${mode==='day'?'active':''}" onclick="setOperationsCalendarMode('day')">Giorno</button><button class="${mode==='week'?'active':''}" onclick="setOperationsCalendarMode('week')">Settimana</button><button class="${mode==='month'?'active':''}" onclick="setOperationsCalendarMode('month')">Mese</button></div></div>
   ${mode==='month'?opMonthCalendar(a):mode==='week'?opWeekCalendar(a):opDayCalendar(a)}`;
 }
-function opCalendarEvent(s,date){return `<button class="calendar-event ${opStatusClass(s)}" onclick="show('services');setTimeout(()=>openService('${s.id}'),60)" title="${esc(opServiceTitle(s))}"><span>${esc((s.service_time||'').slice(0,5)||'—')}</span><strong>${esc(dname(s.dog_id))}</strong><small>${esc(s.service_type||'Servizio')}</small></button>`}
+function opCalendarEvent(s,date){return `<button class="calendar-event ${opStatusClass(s)}" onclick="show('services');viewService('${s.id}')" title="${esc(opServiceTitle(s))}"><span>${esc((s.service_time||'').slice(0,5)||'—')}</span><strong>${esc(dname(s.dog_id))}</strong><small>${esc(s.service_type||'Servizio')}</small></button>`}
 function opMonthCalendar(anchor){const first=new Date(anchor.getFullYear(),anchor.getMonth(),1,12),start=opStartOfWeek(first);let cells='';for(let i=0;i<42;i++){const d=opAddDays(start,i),key=opDateKey(d),same=d.getMonth()===anchor.getMonth(),events=opServicesOn(key);cells+=`<div class="calendar-day ${same?'':'outside'} ${key===localDate()?'today':''}"><div class="calendar-day-number"><span>${d.getDate()}</span>${events.length?`<b>${events.length}</b>`:''}</div><div class="calendar-day-events">${events.slice(0,3).map(s=>opCalendarEvent(s,key)).join('')}${events.length>3?`<button class="calendar-more" onclick="openCalendarDay('${key}')">+${events.length-3} altri</button>`:''}</div></div>`}return `<div class="calendar-scroll calendar-scroll-month"><div class="calendar-weekdays">${['Lun','Mar','Mer','Gio','Ven','Sab','Dom'].map(x=>`<span>${x}</span>`).join('')}</div><div class="calendar-month-grid">${cells}</div></div>`}
 function opWeekCalendar(anchor){const start=opStartOfWeek(anchor);return `<div class="calendar-scroll calendar-scroll-week"><div class="calendar-week-grid">${Array.from({length:7},(_,i)=>{const d=opAddDays(start,i),key=opDateKey(d),events=opServicesOn(key);return `<section class="calendar-week-day ${key===localDate()?'today':''}"><header><strong>${opDayLabel(d)}</strong><span>${events.length} servizi</span></header><div>${events.map(s=>opCalendarEvent(s,key)).join('')||'<small class="muted">Nessun servizio</small>'}</div></section>`}).join('')}</div></div>`}
-function opDayCalendar(anchor){const key=opDateKey(anchor),events=opServicesOn(key).sort((a,b)=>String(a.service_time||'').localeCompare(String(b.service_time||'')));return `<div class="calendar-day-list">${events.map(s=>`<article class="calendar-day-card ${opStatusClass(s)}"><div><span>${esc((s.service_time||'—').slice(0,5))}</span><strong>${esc(opServiceTitle(s))}</strong><small>${esc(cname(s.customer_id))} · ${visitsOnDate(s,key)} uscite</small></div><button onclick="show('services');setTimeout(()=>openService('${s.id}'),60)">Apri</button></article>`).join('')||'<div class="card empty-state"><strong>Nessun servizio</strong><span>La giornata selezionata è libera.</span></div>'}</div>`}
+function opDayCalendar(anchor){const key=opDateKey(anchor),events=opServicesOn(key).sort((a,b)=>String(a.service_time||'').localeCompare(String(b.service_time||'')));return `<div class="calendar-day-list">${events.map(s=>`<article class="calendar-day-card ${opStatusClass(s)}"><div><span>${esc((s.service_time||'—').slice(0,5))}</span><strong>${esc(opServiceTitle(s))}</strong><small>${esc(cname(s.customer_id))} · ${visitsOnDate(s,key)} uscite</small></div><button onclick="show('services');viewService('${s.id}')">Apri</button></article>`).join('')||'<div class="card empty-state"><strong>Nessun servizio</strong><span>La giornata selezionata è libera.</span></div>'}</div>`}
 window.setOperationsCalendarMode=mode=>{operationsState.calendarMode=mode;renderCalendar()};
-window.moveOperationsCalendar=direction=>{const a=operationsState.calendarAnchor,m=operationsState.calendarMode;if(m==='month')a.setMonth(a.getMonth()+direction);else if(m==='week')a.setDate(a.getDate()+7*direction);else a.setDate(a.getDate()+direction);renderCalendar()};
+window.moveOperationsCalendar=direction=>{const a=operationsState.calendarAnchor,m=operationsState.calendarMode;if(m==='month'){a.setDate(1);a.setMonth(a.getMonth()+direction);}else if(m==='week')a.setDate(a.getDate()+7*direction);else a.setDate(a.getDate()+direction);renderCalendar()};
 window.goOperationsToday=()=>{operationsState.calendarAnchor=new Date();renderCalendar()};
 window.openCalendarDay=date=>{operationsState.calendarAnchor=parseLocalDate(date)||new Date();operationsState.calendarMode='day';renderCalendar()};
 
@@ -112,7 +108,10 @@ function statsPreviousRange(r){
 }
 function recordInRange(record,from,to){return normalizePeriods(record).some(p=>(p.end_date||p.start_date)>=from&&p.start_date<=to)}
 function periodOverlapDays(period,from,to){const start=period.start_date>from?period.start_date:from,end=(period.end_date||period.start_date)<to?(period.end_date||period.start_date):to;return start&&end&&start<=end?daysInclusive(start,end):0}
-function proratedServiceAmount(service,from,to,kind='customer'){const periods=normalizePeriods(service),totalDays=periods.reduce((n,p)=>n+Math.max(1,periodDays(p)),0),overlap=periods.reduce((n,p)=>n+periodOverlapDays(p,from,to),0),amount=kind==='employee'?opEmployeeAmount(service):opServiceAmount(service);return totalDays?amount*(overlap/totalDays):0}
+function proratedServiceAmount(service,from,to,kind='customer'){
+  const count=periodsTotals(normalizePeriods(service)).visits,overlap=visitsInRange(service,from,to),amount=kind==='employee'?opEmployeeAmount(service):opServiceAmount(service);
+  return count>0?amount*overlap/count:0;
+}
 function visitsInRange(service,from,to){return normalizePeriods(service).reduce((sum,p)=>sum+periodOverlapDays(p,from,to)*Math.max(1,Number(p.daily_visits||1)),0)}
 function statsSnapshot(from,to){
   const allRows=state.services.filter(s=>recordInRange(s,from,to)),active=allRows.filter(s=>s.status!=='annullato'),matured=active.filter(opIsMatured);

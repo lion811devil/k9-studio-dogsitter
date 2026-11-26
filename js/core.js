@@ -9,7 +9,7 @@ const esc=v=>String(v??'').replace(/[&<>'"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&
 const money=n=>new Intl.NumberFormat('it-IT',{style:'currency',currency:'EUR'}).format(Number(n||0));
 const dateIT=v=>v?new Date(v+'T12:00:00').toLocaleDateString('it-IT'):'—';
 const localDate=(d=new Date())=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-const parseLocalDate=value=>{const match=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value||''));if(!match)return null;const date=new Date(Number(match[1]),Number(match[2])-1,Number(match[3]),12,0,0,0);return Number.isNaN(date.getTime())?null:date};
+const parseLocalDate=value=>{const match=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value||''));if(!match)return null;const date=new Date(Number(match[1]),Number(match[2])-1,Number(match[3]),12,0,0,0);return Number.isNaN(date.getTime())||localDate(date)!==String(value)?null:date};
 const addDays=(value,days)=>{const date=parseLocalDate(value);if(!date)throw Error('Data non valida.');date.setDate(date.getDate()+Number(days||0));return localDate(date)};
 const daysBetween=(from,to)=>{const start=parseLocalDate(from),end=parseLocalDate(to);if(!start||!end)return null;return Math.round((end-start)/86400000)};
 const quoteValidityValue=(quoteDate,validUntil)=>{const days=daysBetween(quoteDate,validUntil);return [7,15,30,60,90].includes(days)?String(days):'custom'};

@@ -8,7 +8,7 @@ function periodRow(kind,p={},index=0){
 }
 function readPeriodRows(kind){
   const host=document.getElementById(kind==='quote'?'quotePeriods':'servicePeriods');if(!host)return [];
-  return [...host.querySelectorAll('.period-row')].map((row,index)=>{const start=row.querySelector('.period-start')?.value,end=row.querySelector('.period-end')?.value||start;if(!start||!end)throw Error(`Completa le date del periodo ${index+1}.`);if(daysBetween(start,end)<0)throw Error(`Nel periodo ${index+1} la data fine precede la data inizio.`);const daily=Math.max(1,Number(row.querySelector('.period-visits')?.value||1));return {start_date:start,end_date:end,daily_visits:daily,time_slot_1:row.querySelector('.period-time-1')?.value||null,time_slot_2:daily>=2?row.querySelector('.period-time-2')?.value||null:null,time_slot_3:daily>=3?row.querySelector('.period-time-3')?.value||null:null,time_slot_4:daily>=4?row.querySelector('.period-time-4')?.value||null:null,position:index+1}})
+  return [...host.querySelectorAll('.period-row')].map((row,index)=>{const start=row.querySelector('.period-start')?.value,end=row.querySelector('.period-end')?.value||start;if(!start||!end)throw Error(`Completa le date del periodo ${index+1}.`);if(daysBetween(start,end)===null||daysBetween(start,end)<0)throw Error(`Nel periodo ${index+1} la data fine precede la data inizio.`);const daily=Math.max(1,Number(row.querySelector('.period-visits')?.value||1));return {start_date:start,end_date:end,daily_visits:daily,time_slot_1:row.querySelector('.period-time-1')?.value||null,time_slot_2:daily>=2?row.querySelector('.period-time-2')?.value||null:null,time_slot_3:daily>=3?row.querySelector('.period-time-3')?.value||null:null,time_slot_4:daily>=4?row.querySelector('.period-time-4')?.value||null:null,position:index+1}})
 }
 window.addPeriodRow=(kind,period={})=>{const host=document.getElementById(kind==='quote'?'quotePeriods':'servicePeriods');if(!host)return;host.insertAdjacentHTML('beforeend',periodRow(kind,period,host.querySelectorAll('.period-row').length));bindPeriodRows(kind);kind==='quote'?applyQuoteServiceType($('#quoteServicePreset')?.value||'Dog Walking'):recalculateServiceTotals()};
 window.removePeriodRow=(kind,button)=>{const host=document.getElementById(kind==='quote'?'quotePeriods':'servicePeriods');if(!host)return;if(host.querySelectorAll('.period-row').length<=1)return toast('Deve rimanere almeno un periodo.');button.closest('.period-row')?.remove();[...host.querySelectorAll('.period-row')].forEach((r,i)=>{r.dataset.periodIndex=i;const t=r.querySelector('.period-row-head strong');if(t)t.textContent=`Periodo ${i+1}`});kind==='quote'?(recalculateQuoteTotal(),scheduleQuoteDraftSave()):recalculateServiceTotals()};
@@ -128,7 +128,9 @@ async function initializePasswordRecovery(){
 }
 
 function authHeaders(extra={}){return {'apikey':C.SUPABASE_ANON_KEY,'Authorization':`Bearer ${state.session?.access_token||C.SUPABASE_ANON_KEY}`,'Content-Type':'application/json',...extra}}
-async function refreshSession(){if(!state.session?.refresh_token)throw Error('Sessione scaduta.');const r=await fetch(`${C.SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`,{method:'POST',headers:{apikey:C.SUPABASE_ANON_KEY,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:state.session.refresh_token})});const d=await r.json();if(!r.ok)throw Error(d.error_description||d.msg||'Sessione scaduta.');state.session=d;localStorage.setItem('k9_session',JSON.stringify(d));return d}
+let sessionRefreshInFlight=null;
+async function refreshSession(){if(sessionRefreshInFlight)return sessionRefreshInFlight;sessionRefreshInFlight=refreshSessionOnce();try{return await sessionRefreshInFlight}finally{sessionRefreshInFlight=null}}
+async function refreshSessionOnce(){if(!state.session?.refresh_token)throw Error('Sessione scaduta.');const r=await fetch(`${C.SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`,{method:'POST',headers:{apikey:C.SUPABASE_ANON_KEY,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:state.session.refresh_token})});const d=await r.json();if(!r.ok)throw Error(d.error_description||d.msg||'Sessione scaduta.');state.session=d;localStorage.setItem('k9_session',JSON.stringify(d));return d}
 async function request(path,opt={},retry=true){if(!configured())throw Error('Configura config.js prima della pubblicazione.');let r=await fetch(C.SUPABASE_URL+path,{...opt,headers:{...authHeaders(),...(opt.headers||{})}});if(r.status===401&&retry&&state.session?.refresh_token){await refreshSession();return request(path,opt,false)}const text=await r.text();let data=null;try{data=text?JSON.parse(text):null}catch{data=text}if(!r.ok)throw Error(data?.message||data?.error_description||data?.hint||text||`Errore ${r.status}`);return data}
 async function currentAuthUser(){if(!state.session?.access_token)throw Error('Sessione non disponibile. Accedi nuovamente.');if(Date.now()/1000>(state.session.expires_at||0)-60)await refreshSession();const r=await fetch(`${C.SUPABASE_URL}/auth/v1/user`,{headers:{apikey:C.SUPABASE_ANON_KEY,Authorization:`Bearer ${state.session.access_token}`}});const d=await r.json();if(!r.ok||!d?.id)throw Error(d?.message||d?.msg||'Sessione utente non valida.');if(state.profile?.id&&d.id!==state.profile.id)throw Error('Sessione non coerente con il profilo aperto. Esci e accedi nuovamente.');return d}
 async function invokeHyperHandler(body,retry=true){await currentAuthUser();const requestId=(crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`);const r=await fetch(`${C.SUPABASE_URL}/functions/v1/hyper-handler`,{method:'POST',headers:{apikey:C.SUPABASE_ANON_KEY,Authorization:`Bearer ${state.session.access_token}`,'Content-Type':'application/json','X-Request-Id':requestId},body:JSON.stringify(body)});if(r.status===401&&retry&&state.session?.refresh_token){await refreshSession();return invokeHyperHandler(body,false)}const text=await r.text();let data;try{data=text?JSON.parse(text):{}}catch{data={message:text}}if(!r.ok)throw Error(data?.message||`Errore funzione ${r.status} · richiesta ${requestId}`);return data}
@@ -141,7 +143,7 @@ const rpc=(name,body={})=>request(`/rest/v1/rpc/${name}`,{method:'POST',body:JSO
 async function login(email,password){const r=await fetch(`${C.SUPABASE_URL}/auth/v1/token?grant_type=password`,{method:'POST',headers:{apikey:C.SUPABASE_ANON_KEY,'Content-Type':'application/json'},body:JSON.stringify({email,password})});const d=await r.json();if(!r.ok)throw Error(d.error_description||d.msg||'Accesso non riuscito');state.session=d;localStorage.setItem('k9_session',JSON.stringify(d));await bootstrap()}
 async function logout(){try{await request('/auth/v1/logout',{method:'POST'})}catch{}localStorage.removeItem('k9_session');location.reload()}
 async function restore(){try{state.session=JSON.parse(localStorage.getItem('k9_session')||'null')}catch{}if(!state.session)return false;try{if(Date.now()/1000>(state.session.expires_at||0)-60)await refreshSession();await bootstrap();return true}catch(e){localStorage.removeItem('k9_session');return false}}
-async function bootstrap(){const p=await select('profiles',`select=*&id=eq.${state.session.user.id}&limit=1`);state.profile=p[0];if(!state.profile||!state.profile.active)throw Error('Account non attivo.');await loadSettings();applyIdentity();$('#auth').classList.add('hidden');$('#app').classList.remove('hidden');$('#roleLabel').textContent=`${state.profile.full_name||state.profile.email} · ${roleLabels[state.profile.role]||state.profile.role}`;buildNav();let recoveredNotifications=0;try{await rpc('refresh_operational_reminders')}catch(e){console.warn('Promemoria operativi:',e.message)}try{recoveredNotifications=Number(await rpc('sync_missed_app_notifications'))||0}catch(e){console.warn('Sincronizzazione notifiche all’avvio:',e.message)}await loadAll();buildNav();startNotificationPolling();show('dashboard');const unread=unreadNotificationCount();if(recoveredNotifications>0)toast(`${recoveredNotifications} ${recoveredNotifications===1?'nuova attività':'nuove attività'} dall’ultimo accesso`);else if(unread>0)toast(`${unread} ${unread===1?'notifica non letta':'notifiche non lette'}`)}
+async function bootstrap(){const p=await select('profiles',`select=*&id=eq.${state.session.user.id}&limit=1`);state.profile=p[0];if(!state.profile||!state.profile.active||!['owner','vice_admin','dipendente'].includes(state.profile.role))throw Error('Account non attivo o ruolo non autorizzato.');await loadSettings();applyIdentity();$('#auth').classList.add('hidden');$('#app').classList.remove('hidden');$('#roleLabel').textContent=`${state.profile.full_name||state.profile.email} · ${roleLabels[state.profile.role]||state.profile.role}`;buildNav();let recoveredNotifications=0;try{await rpc('refresh_operational_reminders')}catch(e){console.warn('Promemoria operativi:',e.message)}try{recoveredNotifications=Number(await rpc('sync_missed_app_notifications'))||0}catch(e){console.warn('Sincronizzazione notifiche all’avvio:',e.message)}await loadAll();buildNav();startNotificationPolling();show('dashboard');const unread=unreadNotificationCount();if(recoveredNotifications>0)toast(`${recoveredNotifications} ${recoveredNotifications===1?'nuova attività':'nuove attività'} dall’ultimo accesso`);else if(unread>0)toast(`${unread} ${unread===1?'notifica non letta':'notifiche non lette'}`)}
 function communicationReadByCurrentUser(message){return state.communicationReads.some(r=>r.message_id===message.id&&r.user_id===state.profile?.id)}
 function communicationReadByRecipient(message){return state.communicationReads.some(r=>r.message_id===message.id&&r.user_id!==message.author_id)}
 function unreadCommunicationCount(serviceId=null){return state.communications.filter(m=>(!serviceId||m.service_id===serviceId)&&m.status==='sent'&&m.author_id!==state.profile?.id&&!communicationReadByCurrentUser(m)).length}
@@ -176,27 +178,34 @@ async function syncNotificationsOnResume(){if(notificationResumeSyncRunning||!st
 function startNotificationPolling(){if(notificationPollTimer)clearInterval(notificationPollTimer);knownNotificationIds=new Set(state.notifications.map(n=>n.id));notificationPollTimer=setInterval(()=>refreshNotifications(),15000);if(!window.__k9NotificationVisibilityBound){document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncNotificationsOnResume()});window.addEventListener('focus',()=>syncNotificationsOnResume());window.addEventListener('pageshow',()=>syncNotificationsOnResume());window.__k9NotificationVisibilityBound=true}}
 window.enableSystemNotifications=async()=>{if(!('Notification'in window))return toast('Notifiche di sistema non supportate.');const p=await Notification.requestPermission();toast(p==='granted'?'Avvisi dispositivo attivati mentre l’app è in esecuzione':'Permesso notifiche non concesso')};
 window.testAppNotification=async()=>{try{await rpc('create_test_app_notification');await refreshNotifications({system:false});renderNotifications();toast('Notifica di prova creata')}catch(e){toast(e?.message||'Impossibile creare la notifica di prova')}};
-function buildNav(){const a=[['dashboard','Dashboard'],['calendar','Calendario'],['statistics','Statistiche'],['customers','Clienti'],['dogs','Animali'],['employees','Utenti'],['services','I miei servizi'],['quotes','Preventivi'],['payments','Economia'],['documents','Documenti'],['notifications','Notifiche'],['audit','Log'],['trash','Cestino'],['profile','Pass'],['settings','Impostazioni']];const e=[['dashboard','Oggi'],['customers','Clienti assegnati'],['dogs','Animali assegnati'],['services','I miei servizi'],['compensation','Compensi'],['notifications','Notifiche'],['profile','Il mio pass']];const unread=unreadCommunicationCount(),unreadN=unreadNotificationCount();$('#nav').innerHTML=(isAdmin()?a:e).map(([id,l])=>`<button data-screen="${id}">${l}${id==='services'&&unread?`<span class="nav-notification">${unread}</span>`:''}${id==='notifications'&&unreadN?`<span class="nav-notification">${unreadN}</span>`:''}</button>`).join('')}
 async function loadDocuments(){
-  let serviceDocs=[];let quoteDocs=[];let receiptDocs=[];
-  try{serviceDocs=await select('dogsitter_document_versions','select=*&deleted_at=is.null&order=created_at.desc')}catch(e){console.warn('Archivio servizi versionato non ancora installato:',e.message);try{serviceDocs=await select('dogsitter_documents','select=*&order=created_at.desc')}catch{serviceDocs=[]}}
-  try{quoteDocs=(await select('dogsitter_quote_document_versions','select=*&deleted_at=is.null&order=created_at.desc')).map(d=>({...d,source_kind:'quote',document_type:'quote'}))}catch(e){console.warn('Archivio preventivi non ancora installato:',e.message)}
-  try{receiptDocs=(await select('dogsitter_receipts','select=*&deleted_at=is.null&order=created_at.desc')).map(d=>({...d,source_kind:'receipt',document_type:'receipt',version:1,is_active:true}))}catch(e){console.warn('Archivio ricevute non ancora installato:',e.message)}
-  return [...receiptDocs,...quoteDocs,...serviceDocs];
+  const serviceDocs=async()=>{try{return await select('dogsitter_document_versions','select=*&deleted_at=is.null&order=created_at.desc')}catch(e){console.warn('Archivio servizi versionato:',e.message);try{return await select('dogsitter_documents','select=*&order=created_at.desc')}catch{return []}}};
+  const typedDocs=async(table,kind)=>{try{return (await select(table,'select=*&deleted_at=is.null&order=created_at.desc')).map(d=>({...d,source_kind:kind,document_type:kind,...(kind==='receipt'?{version:1,is_active:true}:{})}))}catch(e){console.warn('Archivio '+kind+':',e.message);return []}};
+  const [services,quotes,receipts]=await Promise.all([serviceDocs(),typedDocs('dogsitter_quote_document_versions','quote'),typedDocs('dogsitter_receipts','receipt')]);
+  return [...receipts,...quotes,...services];
 }
 async function loadQuotes(){try{return await select('dogsitter_quotes','select=*,quote_items:dogsitter_quote_items(*)&deleted_at=is.null&order=created_at.desc')}catch(e){console.warn('Modulo preventivi non ancora installato:',e.message);return []}}
 async function loadCommunicationReads(){try{return await select('service_communication_reads','select=*&order=read_at.asc')}catch(error){console.warn('Ricevute comunicazioni non disponibili:',error?.message||error);return []}}
 async function loadAll(){if(isAdmin()){[state.customers,state.dogs,state.profiles,state.services,state.quotes,state.documents,state.communications,state.communicationReads,state.notifications,state.periodRuns,state.pdfDrafts]=await Promise.all([select('customers','select=*&deleted_at=is.null&order=last_name.asc,first_name.asc'),select('dogs','select=*&deleted_at=is.null&order=name.asc'),select('profiles','select=*&deleted_at=is.null&order=full_name.asc'),select('dogsitter_services','select=*&deleted_at=is.null&order=service_date.desc,service_time.asc'),loadQuotes(),loadDocuments(),select('service_communications','select=*&order=created_at.asc'),loadCommunicationReads(),select('app_notifications','select=*&deleted_at=is.null&order=created_at.desc'),select('service_period_workflows','select=*&order=service_id.asc,period_index.asc'),select('service_pdf_drafts','select=*&order=updated_at.desc')]);state.compensationServices=state.services;state.compensationPeriodRuns=state.periodRuns}else{const d=await rpc('employee_workspace');state.customers=d.customers||[];state.dogs=d.dogs||[];state.compensationServices=d.compensation_services||[];state.compensationPeriodRuns=d.compensation_period_runs||[];const operational=(d.services||[]).filter(x=>x&&!x.deleted_at&&['programmato','in_corso','da_verificare'].includes(String(x.status||'')));const operationalIds=new Set(operational.map(x=>x.id));const recovered=(state.compensationServices||[]).filter(x=>x&&!x.deleted_at&&!operationalIds.has(x.id)&&['programmato','in_corso','da_verificare'].includes(String(x.status||'')));state.services=[...operational,...recovered].sort((a,b)=>String(b.service_date||'').localeCompare(String(a.service_date||''))||String(a.service_time||'').localeCompare(String(b.service_time||'')));state.periodRuns=(d.period_runs||[]).filter(r=>r&&state.services.some(s=>s.id===r.service_id));state.quotes=[];state.documents=[];state.profiles=[];state.pdfDrafts=[];if(recovered.length)console.warn('Workspace dipendente: recuperati solo servizi con stato operativo coerente:',recovered.map(x=>x.id));[state.communications,state.communicationReads,state.notifications]=await Promise.all([select('service_communications','select=*&order=created_at.asc'),loadCommunicationReads(),select('app_notifications','select=*&order=created_at.desc')])}}
 function resetServiceFilters(){const dateFilter=$('#serviceDateFilter'),statusFilter=$('#serviceStatusFilter');if(dateFilter)dateFilter.value='';if(statusFilter)statusFilter.value=''}
-function show(id){const current=$$('.screen:not(.hidden)')[0]?.id||'';if(id==='services'&&current!=='services')resetServiceFilters();$$('.screen').forEach(e=>e.classList.add('hidden'));$('#'+id).classList.remove('hidden');$$('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.screen===id));const activeNav=$(`#nav button[data-screen="${id}"]`);activeNav?.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'});render(id)}
-function render(id){if(isEmployee()&&!['dashboard','customers','dogs','services','compensation','notifications','profile'].includes(id))id='dashboard';({dashboard:renderDashboard,calendar:renderCalendar,statistics:renderStatistics,customers:renderCustomers,dogs:renderDogs,employees:renderEmployees,services:renderServices,quotes:renderQuotes,compensation:renderComp,payments:renderPayments,documents:renderDocs,notifications:renderNotifications,audit:renderAudit,trash:renderTrash,profile:renderPass,settings:renderSettings}[id]||(()=>{}))()}
+function show(id){
+  if(!allowedScreen(id))id='dashboard';
+  const current=$$('.screen:not(.hidden)')[0]?.id||'';
+  if(id==='services'&&current!=='services')resetServiceFilters();
+  $$('.screen').forEach(e=>e.classList.toggle('hidden',e.id!==id));
+  buildNav(id);render(id);
+}
+function render(id){
+  if(!allowedScreen(id))return;
+  ({dashboard:renderDashboard,calendar:renderCalendar,statistics:renderStatistics,customers:renderCustomers,dogs:renderDogs,employees:renderEmployees,services:renderServices,quotes:renderQuotes,compensation:renderComp,payments:renderPayments,documents:renderDocs,notifications:renderNotifications,audit:renderAudit,trash:renderTrash,profile:renderPass,settings:renderSettings}[id]||(()=>{}))();
+}
 const cname=id=>{const c=state.customers.find(x=>x.id===id);return c?`${c.first_name} ${c.last_name}`:'—'}, dname=id=>state.dogs.find(x=>x.id===id)?.name||'—', pname=id=>state.profiles.find(x=>x.id===id)?.full_name||'—';
 const firstValue=(obj,...keys)=>{for(const key of keys){const value=obj?.[key];if(value!==undefined&&value!==null&&String(value).trim()!=='')return value}return ''};
 const joinedValues=(obj,keys,separator=' · ')=>keys.map(key=>firstValue(obj,key)).filter(value=>String(value).trim()!=='').join(separator);
 const displayValue=(value,fallback='Non indicato')=>String(value??'').trim()||fallback;
 const servicePeriod=s=>periodsSummary(s)||'—';
 const serviceSlots=s=>normalizePeriods(s).map((p,i)=>`P${i+1}: ${periodSlots(p)}`).join(' · ')||'Non indicate';
-const totalVisits=s=>Math.max(1,periodsTotals(normalizePeriods(s)).visits);
+
 const matured=s=>['da_verificare','chiuso'].includes(s.status);
 async function loadSettings(){try{const rows=await select('app_settings','select=*&id=eq.1&limit=1');state.settings={...DEFAULT_SETTINGS,...(rows[0]||{})}}catch(e){state.settings={...DEFAULT_SETTINGS};console.warn('Impostazioni non ancora installate:',e.message)}}
 function identityLogo(){return state.settings.logo_url||'assets/logo.png'}
@@ -249,10 +258,11 @@ function customerCrmSections(customer,dogs,services){
   const quoteCounts={bozza:0,inviato:0,accettato:0,rifiutato:0,scaduto:0,convertito:0};quotes.forEach(q=>{quoteCounts[q.converted_service_id?'convertito':q.status]=(quoteCounts[q.converted_service_id?'convertito':q.status]||0)+1});
   const economicallyRelevantQuotes=quotes.filter(q=>q.converted_service_id||['accettato','inviato'].includes(q.status));
   const totalQuotes=economicallyRelevantQuotes.reduce((sum,q)=>sum+quoteTotal(q),0);
-  const totalServices=serviceRows.reduce((sum,x)=>sum+Number(x.customer_amount||0),0);
+  const financialServices=serviceRows.map(serviceFinancialData);
+  const totalServices=financialServices.reduce((sum,x)=>sum+x.customer_amount,0);
   const acconti=quotes.reduce((sum,q)=>sum+Number(q.deposit_amount||0),0);
-  const incassato=serviceRows.filter(x=>x.customer_payment_status==='incassato').reduce((sum,x)=>sum+Number(x.customer_amount||0),0);
-  const saldoServizi=serviceRows.reduce((sum,x)=>sum+Math.max(0,Number(x.balance_due??(x.customer_payment_status==='incassato'?0:x.customer_amount||0))),0);
+  const incassato=financialServices.filter(x=>x.customer_payment_status==='incassato').reduce((sum,x)=>sum+x.customer_amount,0);
+  const saldoServizi=financialServices.reduce((sum,x)=>sum+x.balance_due,0);
   const residuo=Math.max(0,saldoServizi);
   const unread=serviceRows.reduce((sum,x)=>sum+unreadCommunicationCount(x.id),0);
   const lastService=serviceRows[0];
@@ -407,7 +417,6 @@ function renderEmployees(){
     return `<details class="account-row" data-profile-id="${p.id}"><summary><div class="account-summary-main"><span class="entity-avatar employee-avatar">${esc((p.full_name||p.email||'?').slice(0,2).toUpperCase())}</span><div><strong>${esc(p.full_name||p.email)}</strong><small>${esc(roleLabels[p.role]||p.role)} · ${p.active?'Attivo':'Sospeso'}</small></div></div><span class="account-chevron">⌄</span></summary><div class="account-expanded"><div class="entity-details">${details}</div>${p.is_owner?'<div class="protected-note">Titolare protetto</div>':''}<div class="card-actions"><button class="primary-soft" onclick="openEmployee('${p.id}')">Seleziona e gestisci</button>${!p.is_owner&&p.active?`<button onclick="deactivateUser('${p.id}','${esc(p.full_name||p.email)}')">Disattiva</button>`:''}${!p.is_owner&&!p.active?`<button onclick="reactivateUser('${p.id}','${esc(p.full_name||p.email)}')">Riattiva</button>`:''}${!p.is_owner?`<button class="danger" onclick="archiveEntity('profiles','${p.id}','account ${esc(p.full_name||p.email)}')">Elimina</button>`:''}</div></div></details>`
   }).join('')||'<div class="empty-compact">Nessun account in questa categoria.</div>'}</div></details>`).join('')
 }
-function plannedEndTime(s){const raw=String(s.service_time||'').slice(0,5);if(!/^\d{2}:\d{2}$/.test(raw))return '—';const [h,m]=raw.split(':').map(Number),total=h*60+m+Number(s.planned_duration_minutes||0);return `${String(Math.floor(total/60)%24).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`}
 function communicationLabel(m){return m.author_role==='dipendente'?'Dipendente':m.author_role==='vice_admin'?'Vice amministratore':'Datore di lavoro'}
 function communicationStatusLabel(m){if(m.status==='draft')return 'Bozza';return m.author_id===state.profile?.id?(communicationReadByRecipient(m)?'Letta':'Inviata'):(communicationReadByCurrentUser(m)?'Letta':'Nuova')}
 function communicationTime(v){return v?new Date(v).toLocaleString('it-IT'):'—'}
@@ -466,13 +475,13 @@ function serviceCard(s){
       actions=`<button class="primary-soft" onclick="viewService('${s.id}')">Apri</button><button onclick="addAssignedServiceToCalendar('${s.id}')">Collega a calendario</button><button class="communication-button" onclick="openServiceCommunications('${s.id}')">Comunicazioni${unreadCommunicationCount(s.id)?` <span>${unreadCommunicationCount(s.id)}</span>`:''}</button><button onclick="openService('${s.id}')">Modifica</button>${settlementAction}${s.status==='da_verificare'?`<button onclick="openPdfReviewHub('${s.id}')">Documenti e chiusura</button>`:''}<button class="danger" onclick="archiveEntity('dogsitter_services','${s.id}','servizio ${esc(s.service_type||'')} di ${esc(cname(s.customer_id))}')">Elimina</button>`;
     }
   }
-  const employeeUnit=Number(s.employee_unit_compensation||0)||Number(s.employee_compensation||0)/Math.max(1,s.billing_mode==='ora'?total*Math.max(1,Number(s.planned_duration_minutes||0)/30):total);
+  const employeeUnit=employeeUnitFor(s);
   const employeeUnitLabel=s.billing_mode==='ora'?'Compenso ogni 30 minuti':'Compenso per uscita';
   const employeeUnitMeta=s.billing_mode==='ora'?`${money(employeeUnit)} ogni 30 minuti · ${Number(s.planned_duration_minutes||0)/30} mezze ore × ${total} prestazioni`:`${money(employeeUnit)} per uscita · ${total} uscite totali`;
   const economics=isEmployee()?`<div class="employee-compensation"><span>Compenso della scheda</span><strong>${money(s.employee_compensation)}</strong><small>${employeeUnitMeta}</small></div>`:`<div class="economic-split"><div><span>Importo cliente</span><strong>${money(s.customer_amount)}</strong></div><div><span>${employeeUnitLabel}</span><strong>${money(employeeUnit)}</strong></div><div><span>Compenso totale</span><strong>${money(s.employee_compensation)}</strong></div><div><span>Margine attività</span><strong>${money(margin)}</strong></div></div>`;
   const employeeFacts=isEmployee()?`<div><span>Periodo</span><strong>${esc(servicePeriod(s))}</strong></div><div><span>Frequenza</span><strong>${esc(displayValue(s.frequency,'Non indicata'))}</strong></div><div><span>Fasce orarie</span><strong>${esc(serviceSlots(s))}</strong></div><div><span>Durata</span><strong>${Number(s.planned_duration_minutes||0)} min</strong></div><div><span>Uscite/giorno</span><strong>${visits}</strong></div><div><span>Uscite totali</span><strong>${total}</strong></div>`:`<div><span>Periodo</span><strong>${esc(servicePeriod(s))}</strong></div><div><span>Fasce orarie</span><strong>${esc(serviceSlots(s))}</strong></div><div><span>Durata</span><strong>${Number(s.planned_duration_minutes||0)} min</strong></div><div><span>Uscite totali</span><strong>${total}</strong></div><div><span>Dipendente</span><strong>${esc(pname(s.employee_id))}</strong></div>`;
-  const paymentBlock=isAdmin()&&Number(s.deposit_amount||0)>0?`<div class="service-payment-status"><div><span>Acconto ricevuto</span><strong>${money(s.deposit_amount)}</strong></div><div><span>Residuo cliente</span><strong>${money(Math.max(0,Number(s.balance_due||0)))}</strong></div><div><span>Stato pagamento</span><strong>${s.customer_payment_status==='incassato'?'Incassato':'Da incassare'}</strong></div></div>`:'';
-  return `<details class="record-accordion service-accordion"><summary><div class="record-summary-main"><span class="record-title">${esc(dname(s.dog_id))}</span><small>${esc(cname(s.customer_id))} · ${esc(servicePeriod(s))} · ${esc(s.service_type||'Servizio')}${isAdmin()?` · ${esc(pname(s.employee_id))}`:''}</small></div><span class="status-badge status-${esc(s.status)}">${esc(status)}</span>${unreadCommunicationCount(s.id)?`<span class="service-message-badge" title="Nuove comunicazioni">${unreadCommunicationCount(s.id)}</span>`:''}<span class="accordion-chevron" aria-hidden="true"></span></summary><article class="record-expanded service-card"><div class="service-card-top"><div><span class="entity-kicker">${esc(s.service_type||'SERVIZIO')}</span><h3>${esc(dname(s.dog_id))}</h3><p>${esc(cname(s.customer_id))}</p></div></div><div class="service-facts">${employeeFacts}</div>${servicePeriodWorkflowBlock(s)}${economics}${paymentBlock}${s.keys_status||s.customer_updates?`<div class="operational-note"><b>Organizzazione</b><span>${esc([s.keys_status&&`Chiavi: ${s.keys_status}`,s.customer_updates&&`Aggiornamenti: ${s.customer_updates}`].filter(Boolean).join(' · '))}</span></div>`:''}${s.operational_notes?`<div class="operational-note"><b>Note operative</b><span>${esc(s.operational_notes)}</span></div>`:''}${s.report_text?`<div class="operational-note"><b>Rapporto</b><span>${esc(s.report_text)}</span></div>`:''}${isAdmin()?linkedDocumentsBlock({serviceId:s.id},'Documenti del servizio'):''}<div class="service-actions">${actions}</div></article></details>`;
+  const paymentBlock=isAdmin()?`<div class="service-payment-status"><div><span>Acconto ricevuto</span><strong>${money(s.deposit_amount)}</strong></div><div><span>Residuo cliente</span><strong>${money(Math.max(0,Number(s.balance_due||0)))}</strong></div><div><span>Stato pagamento</span><strong>${s.customer_payment_status==='incassato'?'Incassato':'Da incassare'}</strong></div></div>`:'';
+  return `<details class="record-accordion service-accordion"><summary><div class="record-summary-main"><span class="record-title">${esc(dname(s.dog_id))}</span><small>${esc(cname(s.customer_id))} · ${esc(servicePeriod(s))} · ${esc(s.service_type||'Servizio')}${isAdmin()?` · ${esc(pname(s.employee_id))}`:''}</small></div><span class="status-badge status-${esc(s.status)}">${esc(status)}</span>${unreadCommunicationCount(s.id)?`<span class="service-message-badge" title="Nuove comunicazioni">${unreadCommunicationCount(s.id)}</span>`:''}<span class="accordion-chevron" aria-hidden="true"></span></summary><article class="record-expanded service-card"><div class="service-card-top"><div><span class="entity-kicker">${esc(s.service_type||'SERVIZIO')}</span><h3>${esc(dname(s.dog_id))}</h3><p>${esc(cname(s.customer_id))}</p></div></div><div class="service-facts">${employeeFacts}</div>${servicePeriodWorkflowBlock(s)}${economics}${paymentBlock}${s.keys_status||s.customer_updates?`<div class="operational-note"><b>Organizzazione</b><span>${esc([s.keys_status&&`Chiavi: ${s.keys_status}`,s.customer_updates&&`Aggiornamenti: ${s.customer_updates}`].filter(Boolean).join(' · '))}</span></div>`:''}${s.operational_notes?`<div class="operational-note"><b>Note operative</b><span>${esc(s.operational_notes)}</span></div>`:''}${s.report_text?`<div class="operational-note"><b>Rapporto</b><span>${esc(s.report_text)}</span></div>`:''}${isAdmin()&&linkedQuoteForService(s)?`<div class="service-linked-quote"><button type="button" onclick="openQuote('${linkedQuoteForService(s).id}')">Preventivo collegato</button></div>`:''}<div class="service-actions">${actions}</div>${isAdmin()?`<details class="service-extra"><summary>Documenti collegati</summary>${linkedDocumentsBlock({serviceId:s.id},'Documenti del servizio')}</details>`:''}</article></details>`;
 }
 function employeeServiceIsVisible(s){
   if(!s||s.deleted_at!=null||['chiuso','annullato'].includes(s.status))return false;
@@ -505,32 +514,11 @@ const clientStatusPresets=['Nuovo','Attivo','Cliente abituale','Sospeso','Termin
 const paymentStatusPresets=[{value:'da_incassare',label:'Da incassare'},{value:'incassato',label:'Incassato'}];
 const quotePaymentStatusPresets=['Da pagare','Acconto ricevuto','Pagato','Abbonamento attivo'];
 function linkedQuoteForService(service){if(!service)return null;const qid=service.quote_id||null;return (qid?state.quotes.find(q=>q.id===qid):null)||state.quotes.find(q=>q.converted_service_id===service.id)||null}
-function effectiveServiceCustomerAmount(service){const s=service||{};if(s.billing_mode!=='ora')return Number(s.customer_amount||0);const rate=Number(s.unit_rate||0),minutes=Math.max(0,Number(s.planned_duration_minutes||0)),visits=Math.max(1,totalVisits(s)),discount=Math.max(0,Math.min(100,Number(s.discount_rate||0)));return Number((rate*(minutes/60)*visits*(1-discount/100)).toFixed(2))}
-function serviceFinancialData(service){
-  const q=linkedQuoteForService(service),effective=effectiveServiceCustomerAmount(service);
-  if(!q)return {...service,customer_amount:effective};
-  const legacyTotal=Number(q.total_amount??service.customer_amount??0);
-  const total=service.billing_mode==='ora'?effective:legacyTotal;
-  const deposit=Number(q.deposit_amount||0);
-  // Un pagamento finale già registrato non deve riapparire come saldo residuo.
-  const paid=String(q.payment_status||'').trim().toLowerCase()==='pagato';
-  const fromQuote=q.balance_due==null?total-deposit:Number(q.balance_due);
-  const balance=paid?0:Math.max(0,Number.isFinite(fromQuote)?fromQuote:total-deposit);
-  return {...service,quote_id:q.id,customer_amount:total,unit_rate:Number(service.unit_rate||0),
-    payment_method:service.payment_method||q.payment_terms,
-    customer_payment_status:balance<=0?'incassato':'da_incassare',
-    deposit_amount:deposit,deposit_received_at:q.deposit_received_at||null,
-    deposit_payment_method:q.deposit_payment_method||null,deposit_reference:q.deposit_reference||null,
-    balance_due:balance,quote_payment_status:q.payment_status||null};
-}
-
 const keysPresets=['Sì','No','Da concordare'];
 const keysModePresets=['Consegna a mano','Ritiro presso domicilio','Cassetta sicurezza','Da concordare'];
 const updatePresets=['Messaggio WhatsApp','Foto/video','Solo emergenze','Report a fine servizio','Da concordare'];
 const authorizationPresets=['Autorizzo','Non autorizzo','Solo dopo contatto telefonico'];
 const selectOptions=(values,current='',empty='Seleziona')=>`<option value="">${empty}</option>`+values.map(v=>{const value=Array.isArray(v)?v[0]:v,label=Array.isArray(v)?v[1]:v;return `<option value="${esc(value)}" ${String(value)===String(current)?'selected':''}>${esc(label)}</option>`}).join('');
-const daysInclusive=(start,end)=>{if(!start||!end)return 1;const a=new Date(start+'T00:00:00'),b=new Date(end+'T00:00:00');return Math.max(1,Math.round((b-a)/86400000)+1)};
-
 const quoteStatusLabels={bozza:'Bozza',inviato:'Inviato',accettato:'Accettato',rifiutato:'Rifiutato',scaduto:'Scaduto'};
 // Archivio logico: il preventivo originale resta invariato nel database.
 // E' archiviato quando tutti i servizi collegati risultano chiusi.
@@ -706,17 +694,14 @@ window.recalculateQuoteTotal=()=>{
   const unitPrice=Math.max(0,Number($('#quoteUnitPrice')?.value||0)),billingMode=$('#quoteBillingMode')?.value||'prestazione',hours=Math.max(0,Number($('[name="planned_duration_minutes"]')?.value||0))/60;
   const rows=[...document.querySelectorAll('#quotePeriods .period-row')];
   rows.forEach((row,index)=>{const p=periods[index];const amount=p?periodClientTotal(p,unitPrice)*(billingMode==='ora'?hours:1):0;const unitEl=row.querySelector('.period-unit-price'),amountEl=row.querySelector('.period-amount');if(unitEl)unitEl.textContent=money(unitPrice);if(amountEl)amountEl.textContent=money(amount)});
-  const subtotal=periods.reduce((sum,p)=>sum+periodClientTotal(p,unitPrice)*(billingMode==='ora'?hours:1),0);
-  const rate=Number($('#quoteDiscount')?.value||0),discount=subtotal*rate/100,total=subtotal-discount;
+  const rate=Number($('#quoteDiscount')?.value||0),employeeUnit=Math.max(0,Number($('#quoteEmployeeUnitCompensation')?.value||0));
+  const {subtotal,discount,total,employeeTotal}=calculateAmounts({visits:totals.visits,mode:billingMode,minutes:hours*60,rate:unitPrice,discount:rate,employeeUnit});
   if($('#quoteSubtotalPreview'))$('#quoteSubtotalPreview').textContent=money(subtotal);
   if($('#quoteDiscountPreview'))$('#quoteDiscountPreview').textContent=money(discount);
   if($('#quoteTotalPreview'))$('#quoteTotalPreview').textContent=money(total);
-  const deposit=Math.max(0,Number($('#quoteDepositAmount')?.value||0));if($('#quoteBalancePreview'))$('#quoteBalancePreview').textContent=money(Math.max(0,total-deposit));
+  const deposit=Math.max(0,Number($('#quoteDepositAmount')?.value||0));if($('#quoteBalancePreview'))$('#quoteBalancePreview').textContent=money(paymentBalance(total,deposit,$('#quotePaymentStatus')?.value));
   const summary=$('#quotePeriodsSummary');if(summary)summary.textContent=billingMode==='ora'?`${days} giorni complessivi · ${visits} prestazioni · ${hours.toLocaleString('it-IT')} ore ciascuna`:`${days} giorni complessivi · ${visits} uscite totali`;if($('#quoteUnitPriceLabelText'))$('#quoteUnitPriceLabelText').textContent=billingMode==='ora'?'Tariffa oraria (€)':quoteServiceRule($('#quoteServicePreset')?.value||'Dog Walking').priceLabel;
   const breakdown=$('#quotePeriodBreakdown');if(breakdown){breakdown.classList.toggle('hidden',periods.length<2);breakdown.innerHTML=periods.length>=2?`<h4>Riepilogo dei periodi</h4>${periods.map((p,i)=>`<div><span>Periodo ${i+1} · ${p.start_date===p.end_date?dateIT(p.start_date):dateIT(p.start_date)+' – '+dateIT(p.end_date)} · ${periodVisits(p)} uscite</span><strong>${money(periodClientTotal(p,unitPrice)*(billingMode==='ora'?hours:1))}</strong></div>`).join('')}<div class="period-breakdown-total"><span>Somma totale dei periodi</span><strong>${money(subtotal)}</strong></div>`:''}
-  const employeeUnit=Math.max(0,Number($('#quoteEmployeeUnitCompensation')?.value||0));
-  const employeeFactor=billingMode==='ora'?Math.max(0,hours*2):1;
-  const employeeTotal=Number((employeeUnit*visits*employeeFactor).toFixed(2));
   const margin=Number((total-employeeTotal).toFixed(2));
   if($('#quoteEmployeeUnitLabel'))$('#quoteEmployeeUnitLabel').textContent=billingMode==='ora'?'Compenso dipendente ogni 30 minuti (€)':'Compenso dipendente per prestazione (€)';
   if($('#quoteEmployeeTotalPreview'))$('#quoteEmployeeTotalPreview').textContent=money(employeeTotal);
@@ -803,13 +788,13 @@ window.openQuote=(id=null,customerId='',dogId='',sourceServiceId='')=>{
     const periods=readPeriodRows('quote');const periodTotal=periodsTotals(periods);
     const preset=$('#quoteServicePreset')?.value||'';const custom=String($('#quoteCustomService')?.value||'').trim();const description=preset==='Servizio personalizzato'?custom:preset;const unitPrice=Number($('#quoteUnitPrice')?.value||0);const billingMode=$('#quoteBillingMode')?.value||'prestazione';const durationHours=Math.max(0,Number($('[name="planned_duration_minutes"]')?.value||0))/60;const billedQuantity=billingMode==='ora'?periodTotal.visits*durationHours:periodTotal.visits;const items=[{description,quantity:billedQuantity,unit_price:unitPrice,position:1}];
     if(!description)throw Error('Indica il tipo di servizio.');
-    if(periodTotal.visits<=0)throw Error('Inserisci almeno un periodo valido.');
+    if(periodTotal.visits<=0)throw Error('Inserisci almeno un periodo valido.');if(billedQuantity<=0)throw Error('Indica una durata maggiore di zero per la tariffa oraria.');
     if(unitPrice<0)throw Error('La tariffa cliente non può essere negativa.');
     const paymentPreset=$('#quotePaymentPreset')?.value||'Bonifico';const paymentCustom=String($('#quoteCustomPayment')?.value||'').trim();const paymentTerms=paymentPreset==='Altro'?paymentCustom:paymentPreset;if(!paymentTerms)throw Error('Indica la modalità di pagamento.');
-    const raw=Object.fromEntries(formData);const employeeUnit=Math.max(0,Number($('#quoteEmployeeUnitCompensation')?.value||0));const employeeFactor=billingMode==='ora'?Math.max(0,durationHours*2):1;const employeeTotal=Number((employeeUnit*periodTotal.visits*employeeFactor).toFixed(2));if(!parseLocalDate(raw.quote_date)||!parseLocalDate(raw.valid_until))throw Error('Controlla la data del preventivo e la validità.');if(daysBetween(raw.quote_date,raw.valid_until)<0)throw Error('La validità non può precedere la data del preventivo.');const subtotal=items.reduce((sum,i)=>sum+i.quantity*i.unit_price,0);const discount=Number(raw.discount_rate||0);const total=subtotal*(1-discount/100);
-    const hasDeposit=raw.payment_status==='Acconto ricevuto';const depositAmount=hasDeposit?Number(raw.deposit_amount||0):0;if(hasDeposit&&depositAmount<=0)throw Error('Inserisci l’importo dell’acconto ricevuto.');if(hasDeposit&&depositAmount>total)throw Error('L’acconto non può superare il totale del preventivo.');if(hasDeposit&&!parseLocalDate(raw.deposit_received_at))throw Error('Indica la data di ricezione dell’acconto.');if(hasDeposit&&!String(raw.deposit_payment_method||'').trim())throw Error('Indica la modalità di pagamento dell’acconto.');if(employeeTotal>total)throw Error('Il compenso dipendente totale non può superare il totale del preventivo.');const balanceDue=raw.payment_status==='Pagato'?0:Math.max(0,total-depositAmount);
-    const firstPeriod=periods[0];const payload={customer_id:raw.customer_id,dog_id:raw.dog_id||null,source_service_id:sourceServiceId||q.source_service_id||null,quote_date:raw.quote_date,valid_until:raw.valid_until,status:raw.status,payment_terms:paymentTerms,notes:raw.notes||null,total_amount:total,subtotal_amount:subtotal,discount_rate:discount,frequency:raw.frequency||null,daily_visits:firstPeriod.daily_visits,start_date:firstPeriod.start_date,end_date:firstPeriod.end_date,planned_duration_minutes:Number(raw.planned_duration_minutes||0),billing_mode:billingMode,time_slot_1:firstPeriod.time_slot_1,time_slot_2:firstPeriod.time_slot_2,time_slot_3:firstPeriod.time_slot_3,time_slot_4:firstPeriod.time_slot_4,periods,client_status:raw.client_status||null,payment_status:raw.payment_status||null,deposit_amount:depositAmount,deposit_received_at:hasDeposit?raw.deposit_received_at:null,deposit_payment_method:hasDeposit?raw.deposit_payment_method:null,deposit_reference:hasDeposit?(raw.deposit_reference||null):null,balance_due:balanceDue,employee_unit_compensation:employeeUnit,employee_compensation:employeeTotal,keys_status:raw.keys_status||null,keys_mode:raw.keys_mode||null,customer_updates:raw.customer_updates||null,auth_vet:raw.auth_vet||null,auth_transport:raw.auth_transport||null};
-    let quoteId=id;if(id){await update('dogsitter_quotes',id,payload);await request(`/rest/v1/dogsitter_quote_items?quote_id=eq.${encodeURIComponent(id)}`,{method:'DELETE',headers:{Prefer:'return=minimal'}})}else{const created=await insert('dogsitter_quotes',payload);quoteId=created[0]?.id;if(!quoteId)throw Error('Preventivo non creato.')}await insert('dogsitter_quote_items',items.map(i=>({...i,quote_id:quoteId})));if(id&&q.converted_service_id){await rpc('sync_quote_financials',{p_quote_id:quoteId});}clearQuoteDraft(id);
+    const raw=Object.fromEntries(formData);const employeeUnit=Math.max(0,Number($('#quoteEmployeeUnitCompensation')?.value||0));const employeeFactor=billingMode==='ora'?Math.max(0,durationHours*2):1;const employeeTotal=roundMoney(employeeUnit*periodTotal.visits*employeeFactor);if(!parseLocalDate(raw.quote_date)||!parseLocalDate(raw.valid_until))throw Error('Controlla la data del preventivo e la validità.');if(daysBetween(raw.quote_date,raw.valid_until)<0)throw Error('La validità non può precedere la data del preventivo.');const discount=Number(raw.discount_rate||0);const {subtotal,total}=calculateAmounts({visits:periodTotal.visits,mode:billingMode,minutes:durationHours*60,rate:unitPrice,discount,employeeUnit});
+    const hasDeposit=raw.payment_status==='Acconto ricevuto';const preserveDeposit=raw.payment_status==='Pagato'&&Number(q.deposit_amount||0)>0;const depositAmount=hasDeposit?Number(raw.deposit_amount||0):preserveDeposit?Number(q.deposit_amount):0;if(hasDeposit&&depositAmount<=0)throw Error('Inserisci l’importo dell’acconto ricevuto.');if(depositAmount>total)throw Error('L’acconto non può superare il totale del preventivo.');if(hasDeposit&&!parseLocalDate(raw.deposit_received_at))throw Error('Indica la data di ricezione dell’acconto.');if(hasDeposit&&!String(raw.deposit_payment_method||'').trim())throw Error('Indica la modalità di pagamento dell’acconto.');if(employeeTotal>total)throw Error('Il compenso dipendente totale non può superare il totale del preventivo.');const balanceDue=raw.payment_status==='Pagato'?0:Math.max(0,total-depositAmount);
+    const firstPeriod=periods[0];const payload={customer_id:raw.customer_id,dog_id:raw.dog_id||null,source_service_id:sourceServiceId||q.source_service_id||null,quote_date:raw.quote_date,valid_until:raw.valid_until,status:raw.status,payment_terms:paymentTerms,notes:raw.notes||null,total_amount:total,subtotal_amount:subtotal,discount_rate:discount,frequency:raw.frequency||null,daily_visits:firstPeriod.daily_visits,start_date:firstPeriod.start_date,end_date:firstPeriod.end_date,planned_duration_minutes:Number(raw.planned_duration_minutes||0),billing_mode:billingMode,time_slot_1:firstPeriod.time_slot_1,time_slot_2:firstPeriod.time_slot_2,time_slot_3:firstPeriod.time_slot_3,time_slot_4:firstPeriod.time_slot_4,periods,client_status:raw.client_status||null,payment_status:raw.payment_status||null,deposit_amount:depositAmount,deposit_received_at:hasDeposit?raw.deposit_received_at:preserveDeposit?q.deposit_received_at:null,deposit_payment_method:hasDeposit?raw.deposit_payment_method:preserveDeposit?q.deposit_payment_method:null,deposit_reference:hasDeposit?(raw.deposit_reference||null):preserveDeposit?q.deposit_reference:null,balance_due:balanceDue,employee_unit_compensation:employeeUnit,employee_compensation:employeeTotal,keys_status:raw.keys_status||null,keys_mode:raw.keys_mode||null,customer_updates:raw.customer_updates||null,auth_vet:raw.auth_vet||null,auth_transport:raw.auth_transport||null};
+    await rpc('k9_save_quote_v13',{p_id:id||null,p_payload:payload,p_items:items});clearQuoteDraft(id);
   });
   const customer=$('#quoteCustomer'),dog=$('#quoteDog');const fillDogs=()=>{const dogs=state.dogs.filter(d=>d.customer_id===customer.value);dog.innerHTML='<option value="">Nessun animale / seleziona</option>'+dogs.map(d=>`<option value="${d.id}" ${d.id===selectedDog?'selected':''}>${esc(d.name)}</option>`).join('')};customer.onchange=fillDogs;fillDogs();
   $('#quoteValidityPreset').onchange=e=>{if(e.target.value!=='custom')$('[name="valid_until"]').value=addDays($('[name="quote_date"]').value||localDate(),Number(e.target.value))};
@@ -856,12 +841,12 @@ function quoteToServiceSeed(q){
     employee_compensation:Number(q.employee_compensation||0),
     payment_method:q.payment_terms||'Bonifico',
     client_status:q.client_status||'Confermato',
-    customer_payment_status:Number(q.balance_due??Math.max(0,customerAmount-Number(q.deposit_amount||0)))<=0?'incassato':'da_incassare',
+    customer_payment_status:paymentBalance(customerAmount,q.deposit_amount,q.payment_status)===0?'incassato':'da_incassare',
     deposit_amount:Number(q.deposit_amount||0),
     deposit_received_at:q.deposit_received_at||null,
     deposit_payment_method:q.deposit_payment_method||null,
     deposit_reference:q.deposit_reference||null,
-    balance_due:Number(q.balance_due??Math.max(0,customerAmount-Number(q.deposit_amount||0))),
+    balance_due:paymentBalance(customerAmount,q.deposit_amount,q.payment_status),
     quote_payment_status:q.payment_status||null,
     keys_status:q.keys_status||null,
     keys_mode:q.keys_mode||null,
@@ -924,8 +909,8 @@ function compensationPeriodRows({includeUnmatured=false}={}){
     const service=services.get(r.service_id);if(!service)return null;
     const periods=normalizePeriods(service),period=periods[Number(r.period_index)]||null;if(!period)return null;
     const visits=Number(r.employee_visits??periodVisits(period))||0;
-    const unit=Number(r.employee_unit_compensation??service.employee_unit_compensation??0)||(Number(service.employee_compensation||0)/Math.max(1,totalVisits(service)));
-    const employeeFactor=service.billing_mode==='ora'?Math.max(0,Number(service.planned_duration_minutes||0))/30:1;
+    const employeeFactor=employeeBillingFactor(service);
+    const unit=employeeUnitFor(service,r.employee_unit_compensation);
     const amount=Number(r.employee_amount??(r.status==='chiuso'?unit*visits*employeeFactor:0))||0;
     const maturedRun=r.status==='chiuso'&&!!r.verified_at;
     if(['chiuso','annullato'].includes(String(service.status||''))&&!maturedRun)return null;
@@ -972,18 +957,15 @@ function economyRows(){
     const s=linkedServiceByQuote.get(q.id)||services.find(x=>x.id===q.converted_service_id)||null;
     const total=Number(q.total_amount??(s?.customer_amount||0))||0;
     const deposit=Number(q.deposit_amount??(s?.deposit_amount||0))||0;
-    const rawBalance=q.balance_due??s?.balance_due;
-    let balance=rawBalance===null||rawBalance===undefined?Math.max(0,total-deposit):Math.max(0,Number(rawBalance)||0);
-    const paid=economyPaymentStatus(q,s)==='Pagato';
-    if(paid)balance=0;
+    const balance=paymentBalance(total,deposit,q.payment_status);
+    const paid=balance===0;
     const collected=paid?total:Math.min(total,Math.max(0,deposit));
     return {kind:'quote',id:q.id,quote:q,service:s,total,deposit,balance,collected,paid,customer_id:q.customer_id||s?.customer_id,dog_id:q.dog_id||s?.dog_id,date:q.quote_date||q.created_at||s?.service_date||'',deposit_date:q.deposit_received_at||s?.deposit_received_at||null,deposit_method:q.deposit_payment_method||s?.deposit_payment_method||null,deposit_reference:q.deposit_reference||s?.deposit_reference||null};
   });
   const linkedQuoteIds=new Set(quotes.map(q=>q.id));
-  services.filter(s=>!s.quote_id||!linkedQuoteIds.has(s.quote_id)).forEach(s=>{
-    const total=Number(s.customer_amount||0),deposit=Number(s.deposit_amount||0);
-    const paid=s.customer_payment_status==='incassato';
-    const balance=paid?0:Math.max(0,Number(s.balance_due??Math.max(0,total-deposit))||0);
+  services.filter(s=>(!s.quote_id||!linkedQuoteIds.has(s.quote_id))&&!quotes.some(q=>q.converted_service_id===s.id)).forEach(s=>{
+    const financial=serviceFinancialData(s),total=financial.customer_amount,deposit=Number(financial.deposit_amount||0);
+    const balance=financial.balance_due,paid=financial.customer_payment_status==='incassato';
     rows.push({kind:'service',id:s.id,quote:null,service:s,total,deposit,balance,collected:paid?total:Math.min(total,Math.max(0,deposit)),paid,customer_id:s.customer_id,dog_id:s.dog_id,date:s.service_date||s.created_at||'',deposit_date:s.deposit_received_at||null,deposit_method:s.deposit_payment_method||null,deposit_reference:s.deposit_reference||null});
   });
   return rows.sort((a,b)=>String(b.deposit_date||b.date||'').localeCompare(String(a.deposit_date||a.date||'')));
@@ -1033,7 +1015,7 @@ function renderPayments(){
     </div><div class="service-actions">
       ${r.kind==='quote'?`<button type="button" onclick="openQuote('${r.id}')">Apri preventivo</button>`:''}
       ${s?`<button type="button" onclick="viewService('${s.id}')">Apri servizio</button>`:''}
-      ${s&&s.customer_payment_status!=='incassato'?`<button type="button" onclick="setCustomerPaid('${s.id}')">Registra saldo cliente</button>`:''}
+      ${s&&!r.paid&&!['chiuso','annullato'].includes(s.status)?`<button type="button" onclick="setCustomerPaid('${s.id}')">Registra saldo cliente</button>`:''}
       
     </div></article></details>`;
   }).join('')||'<div class="card">Nessun movimento economico presente.</div>';
@@ -1079,7 +1061,7 @@ window.downloadAllClosedServiceDocuments=async id=>{try{
   const labels={customer:'Cliente',employee:'Dipendente',internal:'Interno'};
   const zip=new JSZip();
   for(const kind of ['customer','employee','internal']){
-    const result=await getClosedServiceDocumentBlob(id,kind,{forceNew:true});
+    const result=await getClosedServiceDocumentBlob(id,kind,{forceNew:false});
     zip.file(result.file_name||`Documento_${labels[kind]}.pdf`,result.blob);
   }
   const s=state.services.find(x=>x.id===id),name=`Documenti_${String(cname(s?.customer_id)||'Cliente').replace(/[^a-z0-9àèéìòù_-]+/gi,'_')}_${String(dname(s?.dog_id)||'Animale').replace(/[^a-z0-9àèéìòù_-]+/gi,'_')}.zip`;
@@ -1220,8 +1202,7 @@ window.openService=(id,seed={})=>{
   if(!isAdmin())return toast('Funzione riservata al titolare o vice amministratore');
   const service=state.services.find(item=>item.id===id)||seed||{};const employees=state.profiles.filter(p=>p.role==='dipendente'&&p.active);
   const servicePeriods=normalizePeriods(service,'service');
-  const initialServiceVisits=Math.max(1,periodsTotals(servicePeriods).visits);
-  const initialEmployeeUnit=Number(service.employee_unit_compensation||0)>0?Number(service.employee_unit_compensation):Number(service.employee_compensation||0)/initialServiceVisits;
+  const initialEmployeeUnit=employeeUnitFor(service);
   const currentType=service.service_type||'Dog Walking';const isCustomType=currentType&&!serviceTypePresets.includes(currentType)||currentType==='Altro servizio';
   const selectedCustomer=service.customer_id||state.customers[0]?.id||'';const assignedEmployee=service.employee_id||state.customers.find(c=>c.id===selectedCustomer)?.assigned_employee_id||'';
   modal(id?'Modifica servizio':'Nuovo servizio',`<div class="service-form-sections">
@@ -1241,7 +1222,7 @@ window.openService=(id,seed={})=>{
   <section><h3>Economia</h3><div class="form-grid">
     <label>Modalità di calcolo<select id="serviceBillingMode" name="billing_mode"><option value="prestazione" ${(service.billing_mode||'prestazione')==='prestazione'?'selected':''}>Per uscita / prestazione</option><option value="ora" ${service.billing_mode==='ora'?'selected':''}>A ore</option></select></label><label><span id="serviceUnitRateLabel">${service.billing_mode==='ora'?'Tariffa oraria (€)':'Costo singola uscita / prestazione (€)'}</span><input id="serviceUnitRate" name="unit_rate" type="number" min="0" step="0.01" value="${Number(service.unit_rate||0)}"></label>
     <label>Sconto applicato<select id="serviceDiscount" name="discount_rate"><option value="0" ${Number(service.discount_rate||0)===0?'selected':''}>Nessuno sconto</option><option value="5" ${Number(service.discount_rate||0)===5?'selected':''}>Sconto 5%</option><option value="10" ${Number(service.discount_rate||0)===10?'selected':''}>Sconto 10%</option></select></label>
-    <label>Importo cliente (€)<input id="serviceCustomerAmount" name="customer_amount" type="number" min="0" step="0.01" value="${Number(service.customer_amount||0)}" required></label>
+    <label>Importo cliente (€)<input id="serviceCustomerAmount" name="customer_amount" readonly type="number" min="0" step="0.01" value="${Number(service.customer_amount||0)}" required></label>
     <label><span id="serviceEmployeeUnitLabel">${service.billing_mode==='ora'?'Compenso dipendente ogni 30 minuti (€)':'Compenso dipendente per uscita (€)'}</span><input id="serviceEmployeeUnitCompensation" name="employee_unit_compensation" type="number" min="0" step="0.01" value="${initialEmployeeUnit.toFixed(2)}" required></label>
     <label>Compenso dipendente totale (€)<input id="serviceEmployeeCompensation" name="employee_compensation" type="number" min="0" step="0.01" value="${Number(service.employee_compensation||0).toFixed(2)}" readonly required></label>
     <label>Modalità pagamento<select id="servicePayment" name="payment_method">${selectOptions(paymentPresets,service.payment_method||'Bonifico')}</select></label>
@@ -1260,67 +1241,20 @@ window.openService=(id,seed={})=>{
   </div></section></div>`,async formData=>{
     const payload=Object.fromEntries(formData);const periods=readPeriodRows('service');const firstPeriod=periods[0];const periodTotal=periodsTotals(periods);payload.periods=periods;payload.service_date=firstPeriod.start_date;payload.end_date=firstPeriod.end_date;payload.daily_visits=firstPeriod.daily_visits;payload.time_slot_1=firstPeriod.time_slot_1;payload.time_slot_2=firstPeriod.time_slot_2;payload.time_slot_3=firstPeriod.time_slot_3;payload.time_slot_4=firstPeriod.time_slot_4;payload.service_type=payload.service_type_choice==='Altro servizio'?String(payload.service_type_custom||'').trim():payload.service_type_choice;delete payload.service_type_choice;delete payload.service_type_custom;
     ['planned_duration_minutes','daily_visits','unit_rate','discount_rate','customer_amount','employee_unit_compensation','employee_compensation'].forEach(k=>payload[k]=Number(payload[k]||0));
-    if(!payload.customer_id||!payload.employee_id)throw Error('Seleziona cliente e dipendente.');payload.dog_id=payload.dog_id||null;const assignedProfile=state.profiles.find(p=>p.id===payload.employee_id&&p.role==='dipendente'&&p.active);if(!assignedProfile)throw Error('Il dipendente selezionato non è disponibile o non è attivo.');if(!payload.service_type)throw Error('Indica il tipo di servizio.');const dog=payload.dog_id?state.dogs.find(d=>d.id===payload.dog_id):null;if(payload.dog_id&&(!dog||dog.customer_id!==payload.customer_id))throw Error('L’animale selezionato non appartiene al cliente.');if(payload.employee_compensation>payload.customer_amount)throw Error('Il compenso dipendente non può superare l’importo cliente.');if(payload.payment_method!=='Altro')payload.payment_method_other=null;
-    const sourceQuoteId=service.quote_id||null;
-    if(sourceQuoteId){
-      const sourceQuote=state.quotes.find(q=>q.id===sourceQuoteId);
-      payload.quote_id=sourceQuoteId;
-      if(sourceQuote){
-        // Il totale appena calcolato nel modulo servizio e' la fonte corretta, soprattutto
-        // per i preventivi orari creati prima della correzione 12.9.55. Non sovrascriverlo
-        // con un eventuale totale storico del preventivo non coerente.
-        const calculatedCustomerAmount=Number(payload.customer_amount||0);
-        const depositAmount=Number(sourceQuote.deposit_amount||0);
-        const quoteTotal=Number(sourceQuote.total_amount||0);
-        const hourlyQuote=(sourceQuote.billing_mode||payload.billing_mode)==='ora';
-        const totalsDiffer=Math.abs(quoteTotal-calculatedCustomerAmount)>0.009;
-        if(hourlyQuote&&totalsDiffer){
-          const discount=Number(sourceQuote.discount_rate||0);
-          const correctedSubtotal=discount<100?calculatedCustomerAmount/(1-discount/100):calculatedCustomerAmount;
-          const correctedBalance=sourceQuote.payment_status==='Pagato'?0:Math.max(0,calculatedCustomerAmount-depositAmount);
-          await update('dogsitter_quotes',sourceQuoteId,{
-            subtotal_amount:Number(correctedSubtotal.toFixed(2)),
-            total_amount:Number(calculatedCustomerAmount.toFixed(2)),
-            balance_due:Number(correctedBalance.toFixed(2))
-          });
-          sourceQuote.total_amount=calculatedCustomerAmount;
-          sourceQuote.subtotal_amount=correctedSubtotal;
-          sourceQuote.balance_due=correctedBalance;
-        }
-        payload.customer_amount=calculatedCustomerAmount;
-        payload.deposit_amount=depositAmount;
-        payload.deposit_received_at=sourceQuote.deposit_received_at||null;
-        payload.deposit_payment_method=sourceQuote.deposit_payment_method||null;
-        payload.deposit_reference=sourceQuote.deposit_reference||null;
-        payload.balance_due=Number(sourceQuote.balance_due??Math.max(0,calculatedCustomerAmount-depositAmount));
-        payload.quote_payment_status=sourceQuote.payment_status||null;
-        payload.customer_payment_status=payload.balance_due<=0?'incassato':'da_incassare';
-        payload.payment_method=sourceQuote.payment_terms||payload.payment_method;
-      }
+    const calc=calculateAmounts({visits:periodTotal.visits,mode:payload.billing_mode,minutes:payload.planned_duration_minutes,rate:payload.unit_rate,discount:payload.discount_rate,employeeUnit:payload.employee_unit_compensation});if(payload.billing_mode==='ora'&&payload.planned_duration_minutes<=0)throw Error('Indica la durata del servizio orario.');payload.customer_amount=calc.total;payload.employee_compensation=calc.employeeTotal;if(!payload.customer_id||!payload.employee_id)throw Error('Seleziona cliente e dipendente.');payload.dog_id=payload.dog_id||null;const assignedProfile=state.profiles.find(p=>p.id===payload.employee_id&&p.role==='dipendente'&&p.active);if(!assignedProfile)throw Error('Il dipendente selezionato non è disponibile o non è attivo.');if(!payload.service_type)throw Error('Indica il tipo di servizio.');const dog=payload.dog_id?state.dogs.find(d=>d.id===payload.dog_id):null;if(payload.dog_id&&(!dog||dog.customer_id!==payload.customer_id))throw Error('L’animale selezionato non appartiene al cliente.');if(payload.employee_compensation>payload.customer_amount)throw Error('Il compenso dipendente non può superare l’importo cliente.');if(payload.payment_method!=='Altro')payload.payment_method_other=null;
+    const sourceQuoteId=service.quote_id||linkedQuoteForService(service)?.id||null;
+    const sourceQuote=sourceQuoteId?state.quotes.find(q=>q.id===sourceQuoteId):null;
+    if(sourceQuoteId&&!sourceQuote)throw Error('Preventivo collegato non disponibile. Aggiorna la pagina.');
+    if(sourceQuote){
+      const total=Number(sourceQuote.total_amount||0);
+      if(Math.abs(Number(payload.customer_amount)-total)>0.009)throw Error('Il totale non coincide con il preventivo collegato. Correggi prima il preventivo oppure ripristina tariffa, durata e periodi concordati.');
+      payload.quote_id=sourceQuote.id;payload.customer_amount=total;
     }
-    let savedService;
-    if(id){savedService=await update('dogsitter_services',id,payload)}else{savedService=await insert('dogsitter_services',payload)}
-    if(sourceQuoteId&&!id){
-      const created=Array.isArray(savedService)?savedService[0]:savedService;
-      if(!created?.id)throw Error('Il servizio non è stato creato correttamente: identificativo mancante.');
-      await update('dogsitter_quotes',sourceQuoteId,{status:'accettato',converted_service_id:created.id});
-      try{await rpc('sync_quote_financials',{p_quote_id:sourceQuoteId})}catch(err){console.warn('Sincronizzazione economica preventivo:',err?.message||err)}
-      // La sincronizzazione storica preventivo->servizio puo' ripristinare il vecchio totale
-      // del preventivo (es. 13 euro) anche se il servizio orario vale 32,50 euro.
-      // Per i servizi a ore il totale calcolato dal modulo e' la fonte economica definitiva.
-      if(payload.billing_mode==='ora'){
-        const correctedTotal=Number(payload.customer_amount||0);
-        const correctedBalance=payload.customer_payment_status==='incassato'?0:Math.max(0,correctedTotal-Number(payload.deposit_amount||0));
-        await update('dogsitter_services',created.id,{customer_amount:correctedTotal,balance_due:correctedBalance});
-        await update('dogsitter_quotes',sourceQuoteId,{total_amount:correctedTotal,balance_due:correctedBalance});
-      }
-      const check=await select('dogsitter_services',`select=id,deleted_at&id=eq.${encodeURIComponent(created.id)}&limit=1`);
-      if(!Array.isArray(check)||!check[0]||check[0].deleted_at)throw Error('Il servizio è stato salvato ma non risulta disponibile nell’elenco Servizi.');
-    }
+    await rpc('k9_save_service_v13',{p_id:id||null,p_payload:payload,p_quote_id:sourceQuoteId});
   });
   const customer=$('#serviceCustomer'),dog=$('#serviceDog'),employee=$('#serviceEmployee');const fillDogs=()=>{const dogs=state.dogs.filter(d=>d.customer_id===customer.value);dog.innerHTML='<option value="">Nessun animale</option>'+dogs.map(d=>`<option value="${d.id}" ${d.id===service.dog_id?'selected':''}>${esc(d.name)}</option>`).join('');const assigned=state.customers.find(c=>c.id===customer.value)?.assigned_employee_id;if(!id&&assigned&&employees.some(p=>p.id===assigned))employee.value=assigned};customer.onchange=fillDogs;fillDogs();
   const toggleCustom=()=>{const on=$('#serviceType').value==='Altro servizio';$('#customServiceTypeWrap').classList.toggle('hidden',!on);$('#customServiceType').required=on};$('#serviceType').onchange=toggleCustom;toggleCustom();
-  window.recalculateServiceTotals=()=>{const periods=readPeriodRows('service'),totals=periodsTotals(periods),rate=Number($('#serviceUnitRate')?.value||0),discount=Number($('#serviceDiscount')?.value||0),billingMode=$('#serviceBillingMode')?.value||'prestazione',durationMinutes=Math.max(0,Number($('[name="planned_duration_minutes"]')?.value||0)),hours=durationMinutes/60,halfHours=durationMinutes/30,customerUnits=billingMode==='ora'?totals.visits*hours:totals.visits,customerTotal=rate*customerUnits*(1-discount/100),employeeUnit=Number($('#serviceEmployeeUnitCompensation')?.value||0),employeeUnits=billingMode==='ora'?totals.visits*halfHours:totals.visits,employeeTotal=employeeUnit*employeeUnits;if($('#serviceCalcPreview'))$('#serviceCalcPreview').textContent=billingMode==='ora'?`Cliente ${money(customerTotal)} · ${hours.toLocaleString('it-IT')} h × ${totals.visits} prestazioni`:`Cliente ${money(customerTotal)}`;if($('#serviceUnitRateLabel'))$('#serviceUnitRateLabel').textContent=billingMode==='ora'?'Tariffa oraria (€)':'Costo singola uscita / prestazione (€)';if($('#serviceEmployeeUnitLabel'))$('#serviceEmployeeUnitLabel').textContent=billingMode==='ora'?'Compenso dipendente ogni 30 minuti (€)':'Compenso dipendente per uscita (€)';if($('#serviceEmployeeCalcPreview'))$('#serviceEmployeeCalcPreview').textContent=billingMode==='ora'?`Dipendente ${money(employeeTotal)} · ${halfHours.toLocaleString('it-IT')} mezze ore × ${totals.visits} prestazioni`:`Dipendente ${money(employeeTotal)} · ${totals.visits} ${totals.visits===1?'uscita':'uscite'}`;if($('#servicePeriodsSummary'))$('#servicePeriodsSummary').textContent=`${totals.days} giorni complessivi · ${totals.visits} uscite totali`;if($('#serviceCustomerAmount'))$('#serviceCustomerAmount').value=customerTotal.toFixed(2);$('#serviceEmployeeCompensation').value=employeeTotal.toFixed(2)};['serviceUnitRate','serviceEmployeeUnitCompensation','serviceDiscount','serviceBillingMode'].forEach(fieldId=>{const el=$('#'+fieldId);if(el){el.oninput=recalculateServiceTotals;el.onchange=recalculateServiceTotals}});const serviceDuration=$('[name="planned_duration_minutes"]');if(serviceDuration){serviceDuration.onchange=recalculateServiceTotals;serviceDuration.oninput=recalculateServiceTotals}bindPeriodRows('service');recalculateServiceTotals();
+  window.recalculateServiceTotals=()=>{let periods;try{periods=readPeriodRows('service')}catch{return}const totals=periodsTotals(periods),rate=Number($('#serviceUnitRate')?.value||0),discount=Number($('#serviceDiscount')?.value||0),billingMode=$('#serviceBillingMode')?.value||'prestazione',durationMinutes=Math.max(0,Number($('[name="planned_duration_minutes"]')?.value||0)),hours=durationMinutes/60,halfHours=durationMinutes/30,employeeUnit=Number($('#serviceEmployeeUnitCompensation')?.value||0),calc=calculateAmounts({visits:totals.visits,mode:billingMode,minutes:durationMinutes,rate,discount,employeeUnit}),customerTotal=calc.total,employeeTotal=calc.employeeTotal;if($('#serviceCalcPreview'))$('#serviceCalcPreview').textContent=billingMode==='ora'?`Cliente ${money(customerTotal)} · ${hours.toLocaleString('it-IT')} h × ${totals.visits} prestazioni`:`Cliente ${money(customerTotal)}`;if($('#serviceUnitRateLabel'))$('#serviceUnitRateLabel').textContent=billingMode==='ora'?'Tariffa oraria (€)':'Costo singola uscita / prestazione (€)';if($('#serviceEmployeeUnitLabel'))$('#serviceEmployeeUnitLabel').textContent=billingMode==='ora'?'Compenso dipendente ogni 30 minuti (€)':'Compenso dipendente per uscita (€)';if($('#serviceEmployeeCalcPreview'))$('#serviceEmployeeCalcPreview').textContent=billingMode==='ora'?`Dipendente ${money(employeeTotal)} · ${halfHours.toLocaleString('it-IT')} mezze ore × ${totals.visits} prestazioni`:`Dipendente ${money(employeeTotal)} · ${totals.visits} ${totals.visits===1?'uscita':'uscite'}`;if($('#servicePeriodsSummary'))$('#servicePeriodsSummary').textContent=`${totals.days} giorni complessivi · ${totals.visits} uscite totali`;if($('#serviceCustomerAmount'))$('#serviceCustomerAmount').value=customerTotal.toFixed(2);$('#serviceEmployeeCompensation').value=employeeTotal.toFixed(2)};['serviceUnitRate','serviceEmployeeUnitCompensation','serviceDiscount','serviceBillingMode'].forEach(fieldId=>{const el=$('#'+fieldId);if(el){el.oninput=recalculateServiceTotals;el.onchange=recalculateServiceTotals}});const serviceDuration=$('[name="planned_duration_minutes"]');if(serviceDuration){serviceDuration.onchange=recalculateServiceTotals;serviceDuration.oninput=recalculateServiceTotals}bindPeriodRows('service');recalculateServiceTotals();
   const toggleKeys=()=>$('#serviceKeysModeWrap').classList.toggle('hidden',!['Sì','Da concordare'].includes($('#serviceKeys').value));$('#serviceKeys').onchange=toggleKeys;toggleKeys();
   const togglePayment=()=>$('#servicePaymentOtherWrap').classList.toggle('hidden',$('#servicePayment').value!=='Altro');$('#servicePayment').onchange=togglePayment;togglePayment();
 };
@@ -1377,7 +1311,6 @@ window.purgeEntity=async(table,id,label)=>{
   }catch(e){toast(e?.message||'Eliminazione definitiva non riuscita')}
 };
 
-function periodRunFor(serviceId,index){return (state.periodRuns||[]).find(r=>r.service_id===serviceId&&Number(r.period_index)===Number(index))}
 function periodRunLabel(status){return ({programmato:'Programmato',in_corso:'In corso',da_verificare:'Da verificare',chiuso:'Chiuso',annullato:'Annullato'}[status]||status||'Programmato')}
 function mergePeriodRun(run){
   if(!run?.service_id||run.period_index===undefined||run.period_index===null)return;
@@ -1445,8 +1378,8 @@ window.addAssignedServiceToCalendar=async id=>{
 };
 window.viewService=id=>{
   let s=state.services.find(x=>x.id===id);if(!s)return toast('Servizio non trovato');
-  s=serviceFinancialData(s);
-  const total=totalVisits(s),unit=Number(s.employee_unit_compensation||0)||Number(s.employee_compensation||0)/Math.max(1,total);
+  if(isAdmin())s=serviceFinancialData(s);
+  const total=totalVisits(s),unit=employeeUnitFor(s);
   const periods=normalizePeriods(s);
   const periodRows=periods.map((p,i)=>[
     dogDetailRow(`Periodo ${i+1} · Data inizio`,dateIT(p.start_date)),
@@ -1501,69 +1434,9 @@ window.viewService=id=>{
       dogDetailRow('Compenso totale scheda',money(s.employee_compensation||0))
     ])])
   ].join('');
-  modal('Dettaglio servizio',`<div class="entity-details">${rows}</div>`,async()=>{});
+  modal('Dettaglio servizio',`<div class="entity-details">${rows}</div><div class="service-actions"><button type="button" onclick="document.getElementById('modal').close();openServiceCommunications('${s.id}')">Comunicazioni</button><button type="button" onclick="addAssignedServiceToCalendar('${s.id}')">Collega a calendario</button>${isAdmin()?`<button type="button" onclick="document.getElementById('modal').close();openService('${s.id}')">Modifica</button><button type="button" onclick="document.getElementById('modal').close();openPdfReviewHub('${s.id}')">Documenti e chiusura</button>`:''}</div>`,async()=>{});
   const save=$('#modalSave');if(save)save.classList.add('hidden')
 };
-function pdfByte(code){
-  const map={8364:128,8218:130,402:131,8222:132,8230:133,8224:134,8225:135,710:136,8240:137,352:138,8249:139,338:140,381:142,8216:145,8217:146,8220:147,8221:148,8226:149,8211:150,8212:151,732:152,8482:153,353:154,8250:155,339:156,382:158,376:159};
-  return code<=255?code:(map[code]||63)
-}
-function pdfEscape(s){let out='';for(const ch of String(s??'')){const b=pdfByte(ch.codePointAt(0));if(b===40||b===41||b===92)out+='\\'+String.fromCharCode(b);else if(b<32||b>126)out+='\\'+b.toString(8).padStart(3,'0');else out+=String.fromCharCode(b)}return out}
-function pdfMoney(n){return `EUR ${Number(n||0).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})}`}
-function hexRgb(hex,fallback='#0f5f53'){const h=/^#[0-9a-f]{6}$/i.test(hex||'')?hex:fallback;return [parseInt(h.slice(1,3),16)/255,parseInt(h.slice(3,5),16)/255,parseInt(h.slice(5,7),16)/255]}
-function tint(rgb,amount=.88){return rgb.map(v=>v+(1-v)*amount)}
-function darken(rgb,amount=.25){return rgb.map(v=>Math.max(0,v*(1-amount)))}
-function pdfNum(n){return Number(n).toFixed(3).replace(/0+$/,'').replace(/\.$/,'')}
-function rgbCmd(rgb,stroke=false){return `${rgb.map(pdfNum).join(' ')} ${stroke?'RG':'rg'}\n`}
-function wrapPdfText(text,maxChars=66){const paragraphs=String(text||'').split(/\n+/),result=[];for(const paragraph of paragraphs){const words=paragraph.trim().split(/\s+/).filter(Boolean);if(!words.length){result.push('');continue}let line='';for(const word of words){const test=line?`${line} ${word}`:word;if(test.length>maxChars&&line){result.push(line);line=word}else line=test}if(line)result.push(line)}return result}
-function buildStyledPdf(data,kind='customer'){
-  const st=state.settings||DEFAULT_SETTINGS;
-  const primary=hexRgb(st.primary_color),secondary=hexRgb(st.secondary_color,'#153e75');
-  const primaryLight=tint(primary,.89),secondaryLight=tint(secondary,.90),gray=[.32,.36,.40],light=[.965,.972,.978],white=[1,1,1],dangerLight=[1,.94,.91],danger=[.70,.20,.08];
-  const pageW=595,pageH=842,margin=38,contentW=pageW-margin*2;
-  const pages=[];let ops=[],y=pageH-margin;
-  const addPage=()=>{if(ops.length)pages.push(ops.join(''));ops=[];y=pageH-margin};
-  const text=(value,x,yy,size=10,font='F1',color=gray)=>{ops.push(rgbCmd(color),`BT /${font} ${size} Tf 1 0 0 1 ${pdfNum(x)} ${pdfNum(yy)} Tm (${pdfEscape(value)}) Tj ET\n`)};
-  const rect=(x,yy,w,h,fill,stroke=null,radius=0)=>{void radius;ops.push(rgbCmd(fill),`${pdfNum(x)} ${pdfNum(yy)} ${pdfNum(w)} ${pdfNum(h)} re f\n`);if(stroke)ops.push(rgbCmd(stroke,true),`${pdfNum(x)} ${pdfNum(yy)} ${pdfNum(w)} ${pdfNum(h)} re S\n`)};
-  const line=(x1,y1,x2,y2,color=[.82,.84,.86],width=.7)=>ops.push(rgbCmd(color,true),`${width} w ${pdfNum(x1)} ${pdfNum(y1)} m ${pdfNum(x2)} ${pdfNum(y2)} l S\n`);
-  const ensure=(height)=>{if(y-height<54){addPage();drawHeader(false)}};
-  const blockTitle=(title,color=primary)=>{ensure(34);rect(margin,y-27,contentW,27,color);text(title.toUpperCase(),margin+12,y-18,10,'F2',white);y-=34};
-  const infoGrid=(items,accent=primaryLight)=>{const rowH=44,cols=2,w=(contentW-8)/2;for(let i=0;i<items.length;i+=2){ensure(rowH+8);for(let c=0;c<2;c++){const item=items[i+c];if(!item)continue;const x=margin+c*(w+8);rect(x,y-rowH,w,rowH,accent);text(item[0],x+10,y-15,7.5,'F2',darken(primary,.1));text(String(item[1]??'—'),x+10,y-32,10,'F1',[.12,.15,.18])}y-=rowH+8}};
-  const paragraphBlock=(titleText,body,accent=secondaryLight)=>{const lines=wrapPdfText(body||'Nessuna nota inserita.',76);const h=34+lines.length*13+10;ensure(h+8);rect(margin,y-h,contentW,h,accent);text(titleText.toUpperCase(),margin+12,y-18,8,'F2',darken(secondary,.12));let ty=y-37;for(const l of lines){text(l,margin+12,ty,9,'F1',[.14,.17,.20]);ty-=13}y-=h+8};
-  const drawHeader=(first=true)=>{const title=kind==='employee'?'PROSPETTO COMPENSO DIPENDENTE':'RAPPORTO SERVIZIO CLIENTE';rect(0,pageH-112,pageW,112,primary);rect(0,pageH-118,pageW,6,secondary);text(st.organization_name||DEFAULT_SETTINGS.organization_name,margin,pageH-47,18,'F2',white);if(st.subtitle)text(st.subtitle,margin,pageH-66,9,'F1',primaryLight);text(title,margin,pageH-91,11,'F2',white);const badge=kind==='employee'?'USO INTERNO':'DOCUMENTO CLIENTE';rect(pageW-margin-120,pageH-94,120,27,secondary);text(badge,pageW-margin-108,pageH-84,8,'F2',white);y=pageH-140;if(!first){text('Continuazione documento',margin,y,8,'F3',gray);y-=22}};
-  drawHeader(true);
-  const docNo=data.document_number||`K9-${String(data.id||data.service_id||'').slice(0,8).toUpperCase()}`;
-  infoGrid([['NUMERO DOCUMENTO',docNo],['DATA EMISSIONE',new Date().toLocaleDateString('it-IT')]],light);
-  blockTitle('Anagrafica e servizio');
-  infoGrid([['CLIENTE',data.customer_name||'—'],['CANE',data.dog_name||'—'],['TIPO SERVIZIO',data.service_type||'—'],['DATA E ORA',`${dateIT(data.service_date)} - ${String(data.service_time||'').slice(0,5)||'—'}`],['USCITE PREVISTE',data.daily_visits||1],['OPERATORE',data.employee_name||'—']],primaryLight);
-  blockTitle('Svolgimento',secondary);
-  infoGrid([['INIZIO EFFETTIVO',data.started_at?new Date(data.started_at).toLocaleString('it-IT'):'—'],['FINE EFFETTIVA',data.completed_at?new Date(data.completed_at).toLocaleString('it-IT'):'—']],secondaryLight);
-  paragraphBlock('Rapporto del servizio',data.report_text,light);
-  if(data.incident_notes)paragraphBlock('Anomalie e note',data.incident_notes,dangerLight);
-  if(kind==='customer'){
-    blockTitle('Riepilogo economico cliente',primary);
-    ensure(78);rect(margin,y-68,contentW,68,primaryLight);text('TOTALE SERVIZI',margin+16,y-23,9,'F2',darken(primary,.15));text(pdfMoney(data.customer_amount),margin+16,y-51,22,'F2',primary);y-=78;
-    ensure(24);text('Documento cliente: compensi del dipendente e margini interni non sono inclusi.',margin,y-8,7.5,'F3',gray);y-=24;
-  }else{
-    blockTitle('Riepilogo compenso dipendente',secondary);
-    ensure(102);rect(margin,y-92,contentW,92,secondaryLight);text('COMPENSO DELLA SCHEDA',margin+16,y-24,9,'F2',darken(secondary,.12));text(pdfMoney(data.employee_compensation),margin+16,y-57,24,'F2',secondary);text(`${Number(data.daily_visits||1)} ${Number(data.daily_visits||1)===1?'uscita':'uscite'} - Stato: ${data.employee_payment_status||'da_liquidare'}`,margin+16,y-78,9,'F1',gray);y-=102;
-    ensure(24);text('Documento interno: importo cliente e margine aziendale non sono inclusi.',margin,y-8,7.5,'F3',gray);y-=24;
-  }
-  if(st.show_signatures_pdf){ensure(72);line(margin,y-4,margin+210,y-4);line(pageW-margin-210,y-4,pageW-margin,y-4);text(kind==='customer'?'Firma / accettazione cliente':'Firma dipendente',margin,y-22,8,'F1',gray);text('Approvazione responsabile',pageW-margin-210,y-22,8,'F1',gray);y-=52}
-  if(data.approver_name&&y>48){text(`Approvato da ${data.approver_name}${data.approved_at?' il '+new Date(data.approved_at).toLocaleString('it-IT'):''}`,margin,46,7.5,'F3',gray)}
-  if(st.show_footer_pdf&&(st.footer_text||st.legal_text)){line(margin,52,pageW-margin,52);const lines=wrapPdfText([st.footer_text,st.legal_text].filter(Boolean).join(' · '),105).slice(0,3);let fy=39;for(const footer of lines){text(footer,margin,fy,6.7,'F1',gray);fy-=9}}
-  addPage();
-  const objs=[];const kids=[];let obj=1;const catalog=obj++,pagesObj=obj++,fontRegular=obj++,fontBold=obj++,fontItalic=obj++;
-  const pageDefs=[];for(const stream of pages){const pageObj=obj++,contentObj=obj++;kids.push(`${pageObj} 0 R`);pageDefs.push({pageObj,contentObj,stream})}
-  objs[catalog]=`<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;
-  objs[pagesObj]=`<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${pages.length} >>`;
-  objs[fontRegular]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
-  objs[fontBold]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
-  objs[fontItalic]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /Encoding /WinAnsiEncoding >>';
-  for(const p of pageDefs){objs[p.pageObj]=`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /Font << /F1 ${fontRegular} 0 R /F2 ${fontBold} 0 R /F3 ${fontItalic} 0 R >> >> /Contents ${p.contentObj} 0 R >>`;objs[p.contentObj]=`<< /Length ${p.stream.length} >>\nstream\n${p.stream}\nendstream`}
-  let pdf='%PDF-1.4\n%K9PDF\n',offsets=[0];for(let i=1;i<objs.length;i++){offsets[i]=pdf.length;pdf+=`${i} 0 obj\n${objs[i]}\nendobj\n`}const xref=pdf.length;pdf+=`xref\n0 ${objs.length}\n0000000000 65535 f \n`;for(let i=1;i<objs.length;i++)pdf+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';pdf+=`trailer\n<< /Size ${objs.length} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  return new Blob([pdf],{type:'application/pdf'})
-}
 function servicePdfData(service,extra={}){service=serviceFinancialData(service);const docNumber=extra.document_number||(extra.progressive?`${String(extra.progressive).padStart(3,'0')} · V${Number(extra.version||1)}`:`K9-${service.service_date?.replaceAll('-','')||''}-${String(service.id).slice(0,6).toUpperCase()}`);return {...service,...extra,id:service.id,service_id:service.id,customer_name:extra.customer_name||cname(service.customer_id),dog_name:extra.dog_name||dname(service.dog_id),employee_name:extra.employee_name||pname(service.employee_id),document_number:docNumber}}
 function downloadBlob(blob,fileName){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=fileName;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500)}
 window.closeService=async id=>{
@@ -1573,7 +1446,7 @@ window.closeService=async id=>{
   if(s.status==='chiuso')return toast('Il servizio è già chiuso e archiviato.');
   const pending=serviceClosurePendingPeriods(id);
   if(pending.length)return toast(`Completa prima ${pending.map(x=>`P${x.index}: ${periodRunLabel(x.status)}`).join(', ')}.`);
-  if(s.customer_payment_status!=='incassato'&&Number(s.balance_due||0)>0)return setCustomerPaid(id,true);
+  if(s.customer_payment_status!=='incassato'||(linkedQuoteForService(s)&&String(linkedQuoteForService(s).payment_status||'').toLowerCase()!=='pagato'))return setCustomerPaid(id,true);
   if(!confirm(`Chiudere definitivamente il servizio di ${cname(s.customer_id)} / ${dname(s.dog_id)}? Il servizio uscirà dalle attività operative e resterà nello storico amministrativo.`))return;
   try{
     await update('dogsitter_services',id,{status:'chiuso',completed_at:new Date().toISOString(),balance_due:0,customer_payment_status:'incassato'});
@@ -1585,7 +1458,7 @@ window.closeService=async id=>{
 };
 function serviceClosurePendingPeriods(id){const service=state.services.find(x=>x.id===id);if(!service)return[];const periods=normalizePeriods(service),runs=(state.periodRuns||[]).filter(r=>r.service_id===id);return periods.map((p,i)=>{const run=runs.find(r=>Number(r.period_index)===i);return {index:i+1,start_date:p.start_date,end_date:p.end_date,status:run?.status||'programmato'}}).filter(x=>!['chiuso','annullato'].includes(x.status))}
 function servicePeriodsReadyForClosure(id){return serviceClosurePendingPeriods(id).length===0}
-async function ensureServiceClosedForReceipt(id){const s=state.services.find(x=>x.id===id);if(!s)throw Error('Servizio non trovato');if(s.status==='chiuso')return s;if(!servicePeriodsReadyForClosure(id))throw Error('Prima di emettere la ricevuta devono essere terminati tutti i periodi del servizio.');await update('dogsitter_services',id,{status:'chiuso',completed_at:new Date().toISOString()});await loadAll();return state.services.find(x=>x.id===id)||s}
+async function ensureServiceClosedForReceipt(id){const s=state.services.find(x=>x.id===id);if(!s)throw Error('Servizio non trovato');if(s.status==='annullato')throw Error('Il servizio è annullato.');const q=linkedQuoteForService(s);if(!q)throw Error('Preventivo collegato non trovato.');if(String(q.payment_status||'').toLowerCase()!=='pagato'||s.customer_payment_status!=='incassato'||serviceFinancialData(s).customer_payment_status!=='incassato')throw Error('Registra prima il saldo cliente.');if(s.status==='chiuso')return s;if(!servicePeriodsReadyForClosure(id))throw Error('Prima di emettere la ricevuta devono essere terminati tutti i periodi del servizio.');await update('dogsitter_services',id,{status:'chiuso',completed_at:new Date().toISOString()});await loadAll();return state.services.find(x=>x.id===id)||s}
 function receiptDataForService(id,testMode=false,meta={}){
   const rawService=state.services.find(x=>x.id===id);if(!rawService)throw Error('Servizio non trovato');
   const quote=linkedQuoteForService(rawService);
@@ -1613,7 +1486,7 @@ async function makeServiceReceipt(id,testMode=false,meta={}){
 }
 async function uploadReceiptDocument(path,blob){const r=await fetch(`${C.SUPABASE_URL}/storage/v1/object/service-documents/${path}`,{method:'POST',headers:{apikey:C.SUPABASE_ANON_KEY,Authorization:`Bearer ${state.session.access_token}`,'Content-Type':'application/pdf','x-upsert':'true'},body:blob});const t=await r.text();if(!r.ok)throw Error(t||'Archiviazione ricevuta non riuscita')}
 window.downloadServiceReceiptTest=async id=>{try{if(!isAdmin())throw Error('Funzione riservata ad amministratore e vice amministratore.');const data=receiptDataForService(id,true),blob=await makeServiceReceipt(id,true);downloadBlob(blob,`PROVA_Ricevuta_${String(data.customer_name||'cliente').replace(/[^a-z0-9àèéìòù_-]+/gi,'_')}_${data.receipt_date}.pdf`);toast('Ricevuta di prova generata: nessun dato del servizio è stato modificato')}catch(e){toast(e.message||'Generazione ricevuta di prova non riuscita')}};
-window.downloadServiceReceipt=async id=>{try{if(!isAdmin())throw Error('Funzione riservata al titolare o vice amministratore.');const existing=state.documents.find(d=>d.source_kind==='receipt'&&d.service_id===id&&documentIsReady(d));if(existing){await downloadStoredDocument(existing.id);return}await ensureServiceClosedForReceipt(id);const current=state.services.find(x=>x.id===id);if(current?.customer_payment_status!=='incassato')throw Error('Per emettere la ricevuta reale devi prima registrare il saldo cliente come incassato.');const meta=await rpc('create_service_receipt',{p_service_id:id});const blob=await makeServiceReceipt(id,false,meta);await uploadReceiptDocument(meta.storage_path,blob);await rpc('finalize_service_receipt',{p_receipt_id:meta.id});await loadAll();renderServices();downloadBlob(blob,meta.file_name);toast(`Ricevuta ${meta.receipt_number} emessa, archiviata e collegata al servizio`)}catch(e){toast(e.message||'Emissione ricevuta non riuscita')}};
+window.downloadServiceReceipt=async id=>{try{if(!isAdmin())throw Error('Funzione riservata al titolare o vice amministratore.');const existing=state.documents.find(d=>d.source_kind==='receipt'&&d.service_id===id&&documentIsReady(d));if(existing){await downloadStoredDocument(existing.id);return}await ensureServiceClosedForReceipt(id);const current=state.services.find(x=>x.id===id);if(!current||serviceFinancialData(current).customer_payment_status!=='incassato')throw Error('Per emettere la ricevuta reale devi prima registrare il saldo cliente come incassato.');const meta=await rpc('create_service_receipt',{p_service_id:id});const blob=await makeServiceReceipt(id,false,meta);await uploadReceiptDocument(meta.storage_path,blob);await rpc('finalize_service_receipt',{p_receipt_id:meta.id});await loadAll();renderServices();downloadBlob(blob,meta.file_name);toast(`Ricevuta ${meta.receipt_number} emessa, archiviata e collegata al servizio`)}catch(e){toast(e.message||'Emissione ricevuta non riuscita')}};
 window.shareServiceReceipt=async id=>{try{const existing=state.documents.find(d=>d.source_kind==='receipt'&&d.service_id===id&&d.status!=='archived');if(!existing)throw Error('Prima emetti la ricevuta definitiva.');await shareStoredDocument(existing.id)}catch(e){if(e.name!=='AbortError')toast(e.message||'Condivisione ricevuta non riuscita')}};
 
 async function makePassPdf(){
@@ -1642,7 +1515,6 @@ async function uploadDocument(path,blob){const r=await fetch(`${C.SUPABASE_URL}/
 async function generateArchivedDocument(meta,{download=false}={}){const source=state.services.find(s=>s.id===meta.service_id)||meta,kind=['customer','employee','internal'].includes(meta.document_type)?meta.document_type:'customer',draft=kind==='internal'?{}:pdfDraftFor(meta.service_id,kind),data=reviewedPdfData(source,kind,{...draft,...meta});if(!window.K9PdfEngine?.createServicePdf)throw Error('Motore PDF non disponibile. Aggiorna la pagina.');const blob=await window.K9PdfEngine.createServicePdf(data,kind,state.settings||DEFAULT_SETTINGS,identityLogo());await uploadDocument(meta.storage_path,blob);await rpc('finalize_document_version',{p_document_id:meta.id});if(download)downloadBlob(blob,meta.file_name);return blob}
 
 function pdfDraftFor(serviceId,kind){return (state.pdfDrafts||[]).find(d=>d.service_id===serviceId&&d.document_type===kind)?.draft_data||{}}
-async function savePdfDraft(serviceId,kind,data){const existing=(state.pdfDrafts||[]).find(d=>d.service_id===serviceId&&d.document_type===kind);if(existing)await update('service_pdf_drafts',existing.id,{draft_data:data,updated_by:state.profile.id,updated_at:new Date().toISOString()});else await insert('service_pdf_drafts',{service_id:serviceId,document_type:kind,draft_data:data,updated_by:state.profile.id});}
 function reviewedPdfData(service,kind,draft={}){service=serviceFinancialData(service);const base=servicePdfData(service);return {...base,...draft,service_id:service.id,document_type:kind,periods:normalizePeriods(service),period_runs:(state.periodRuns||[]).filter(r=>r.service_id===service.id)}}
 window.openPdfReviewHub=id=>{
   if(!isAdmin())return toast('Funzione riservata al titolare o vice amministratore');
@@ -1712,7 +1584,7 @@ function customerOnlyQuoteData(meta={}){
   return Object.fromEntries(allowed.filter(key=>Object.prototype.hasOwnProperty.call(meta,key)).map(key=>[key,meta[key]]));
 }
 
-async function fetchPdfAttachment(path){const r=await fetch(`${C.SUPABASE_URL}/storage/v1/object/pdf-attachments/${path}`,{headers:{apikey:C.SUPABASE_ANON_KEY,Authorization:`Bearer ${state.session.access_token}`}});if(!r.ok)throw Error('Impossibile leggere un allegato PDF.');return new Uint8Array(await r.arrayBuffer())}
+async function fetchPdfAttachment(path){return new Uint8Array(await (await fetchPdfAttachmentBlob(path)).arrayBuffer())}
 async function mergeQuoteAttachments(baseBlob){const attachments=pdfAttachments().filter(a=>a.enabled!==false);if(state.settings.attach_pdfs_to_quotes===false||!attachments.length)return baseBlob;if(!window.PDFLib?.PDFDocument)throw Error('Motore unione PDF non disponibile. Ricarica l’app.');const out=await PDFLib.PDFDocument.load(await baseBlob.arrayBuffer());for(const a of attachments){const src=await PDFLib.PDFDocument.load(await fetchPdfAttachment(a.path));const pages=await out.copyPages(src,src.getPageIndices());pages.forEach(p=>out.addPage(p))}return new Blob([await out.save()],{type:'application/pdf'})}
 
 async function generateArchivedQuoteDocument(meta,{download=true}={}){if(!window.K9PdfEngine?.createQuotePdf)throw Error('Motore PDF preventivo non disponibile. Aggiorna la pagina.');const quote=state.quotes.find(q=>q.id===(meta.quote_id||meta.id))||{};const quoteData=customerOnlyQuoteData({...quote,...meta,items:meta.items||quote.quote_items||[],periods:normalizePeriods(quote,'quote')});let blob=await window.K9PdfEngine.createQuotePdf(quoteData,state.settings||DEFAULT_SETTINGS,identityLogo());blob=await mergeQuoteAttachments(blob);await uploadDocument(meta.storage_path,blob);await rpc('finalize_quote_document_version',{p_document_id:meta.id});if(download)downloadBlob(blob,meta.file_name);return blob}
@@ -1777,39 +1649,18 @@ window.setCustomerPaid=async(id,closeAfter=false)=>{
     if(!isAdmin())throw Error('Funzione riservata al titolare o vice amministratore.');
     const rawService=state.services.find(s=>s.id===id);
     if(!rawService)throw Error('Servizio non trovato. Aggiorna la pagina.');
-    if(rawService.status==='chiuso')throw Error('Il servizio è già chiuso. Controlla l’archivio.');
+    if(['chiuso','annullato'].includes(rawService.status))throw Error('Il servizio non è operativo. Controlla l’archivio.');
     const quote=linkedQuoteForService(rawService);
-    if(!quote)throw Error('Preventivo collegato non trovato. Verifica il collegamento in Preventivi.');
-    if(closeAfter&&!servicePeriodsReadyForClosure(id))throw Error('Non è possibile chiudere il servizio: uno o più periodi non sono ancora completati e verificati.');
-    const total=Number(quote.total_amount??rawService.customer_amount??0),deposit=Number(quote.deposit_amount||0);
-    const alreadyPaid=String(quote.payment_status||'').trim().toLowerCase()==='pagato';
-    const fromQuote=quote.balance_due==null?total-deposit:Number(quote.balance_due);
-    const saldo=alreadyPaid?0:Math.max(0,Number.isFinite(fromQuote)?fromQuote:total-deposit);
+    if(closeAfter&&!servicePeriodsReadyForClosure(id))throw Error('Verifica tutti i periodi prima della chiusura.');
+    const financial=serviceFinancialData(rawService),total=financial.customer_amount,deposit=Number(financial.deposit_amount||0),saldo=financial.balance_due;
     const savePayment=async(method,other)=>{
-      if(closeAfter&&!servicePeriodsReadyForClosure(id))throw Error('Verifica i periodi prima di chiudere il servizio. Il saldo non è stato registrato.');
-      // Il trigger del preventivo sincronizza i dati del servizio: scrivere prima il preventivo
-      // evita che sovrascriva il metodo di saldo scelto e l'eventuale chiusura.
-      const qSaved=await update('dogsitter_quotes',quote.id,{payment_status:'Pagato',balance_due:0});
-      if(!Array.isArray(qSaved)||!qSaved.some(q=>q.id===quote.id))
-        throw Error('Il database non ha confermato la registrazione del pagamento sul preventivo.');
-      let sSaved;
-      try{
-        sSaved=await update('dogsitter_services',id,{
-          customer_payment_status:'incassato',balance_due:0,quote_payment_status:'Pagato',
-          payment_method:method,payment_method_other:other,
-          ...(closeAfter?{status:'chiuso',completed_at:new Date().toISOString()}:{})
-        });
-        if(!Array.isArray(sSaved)||!sSaved.some(s=>s.id===id))throw Error('Il database non ha confermato il salvataggio del servizio.');
-        if(closeAfter&&sSaved.find(s=>s.id===id)?.status!=='chiuso')throw Error('Lo stato del servizio non risulta chiuso.');
-      }catch(error){
-        // Non nascondere il successo parziale: il preventivo potrebbe essere già pagato.
-        throw Error('Pagamento registrato nel preventivo ma chiusura/aggiornamento del servizio non completati. '+(error?.message||String(error))+' Controlla il servizio prima di riprovare.');
-      }
-      await loadAll();renderPayments();renderServices();renderDashboard();
+      await rpc('k9_register_payment_v13',{p_service_id:id,p_method:method,p_other:other||null,p_close:!!closeAfter});
+      // Il salvataggio del modal aggiorna già dati e schermata corrente.
+      if(saldo<=0){await loadAll();render($$('.screen:not(.hidden)')[0]?.id||'dashboard');}
       toast(closeAfter?'Saldo registrato e servizio chiuso.':'Saldo registrato correttamente.');
     };
     const currentMethod=paymentPresets.includes(rawService.payment_method)?rawService.payment_method:
-      paymentPresets.includes(quote.payment_terms)?quote.payment_terms:'Bonifico';
+      paymentPresets.includes(quote?.payment_terms)?quote.payment_terms:'Bonifico';
     if(saldo<=0){
       if(closeAfter&&!confirm('Il saldo risulta già pagato. Vuoi chiudere e archiviare il servizio?'))return;
       await savePayment(currentMethod,rawService.payment_method==='Altro'?rawService.payment_method_other||null:null);
@@ -1840,7 +1691,7 @@ window.setPeriodEmployeePaid=async workflowId=>{
 $('#loginForm').addEventListener('submit',async e=>{e.preventDefault();$('#authError').textContent='';try{if(!configured())throw Error('Configura config.js.');await login($('#loginEmail').value.trim(),$('#loginPassword').value)}catch(err){$('#authError').textContent=err.message}});
 $('#forgotPassword').addEventListener('click',async()=>{try{$('#authError').textContent='';if(!configured())throw Error('Configura config.js.');await sendPasswordRecoveryEmail()}catch(err){$('#authError').textContent=err.message}});
 $('#passwordRecoveryForm').addEventListener('submit',async e=>{e.preventDefault();$('#recoveryError').textContent='';try{const p=$('#recoveryPassword').value,c=$('#recoveryPasswordConfirm').value;if(p.length<8)throw Error('La password deve contenere almeno 8 caratteri.');if(p!==c)throw Error('Le due password non coincidono.');await updateRecoveredPassword(p)}catch(err){$('#recoveryError').textContent=err.message}});
-$('#logoutBtn').onclick=logout;$('#nav').onclick=e=>{const b=e.target.closest('[data-screen]');if(b)show(b.dataset.screen)};
+$('#logoutBtn').onclick=logout;$('#nav').onclick=$('#subnav').onclick=e=>{const b=e.target.closest('[data-screen]');if(b)show(b.dataset.screen)};$('#notificationShortcut').onclick=()=>show('notifications');
 $('[data-action="new-customer"]').onclick=()=>isAdmin()?openCustomer():toast('Funzione non disponibile per il dipendente');$('[data-action="new-dog"]').onclick=()=>isAdmin()?openDog():toast('Funzione non disponibile per il dipendente');$('[data-action="new-service"]').onclick=()=>isAdmin()?openService():toast('Funzione non disponibile per il dipendente');$('[data-action="new-employee"]').onclick=()=>isAdmin()?createAccount():toast('Funzione non disponibile per il dipendente');
 $('#serviceDateFilter').onchange=renderServices;$('#serviceStatusFilter').onchange=renderServices;$('#clearFilters').onclick=()=>{resetServiceFilters();renderServices()};
 if('serviceWorker' in navigator){addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(err=>console.warn('Service Worker:',err)));}
