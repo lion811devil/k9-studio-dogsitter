@@ -1,22 +1,23 @@
-// K9 Studio Dogsitter 13.1.1 — Service Worker aggiornamento affidabile
-const K9_SW_VERSION='13.1.1';
+// K9 Studio Dogsitter 13.1.3 — Service Worker aggiornamento affidabile
+const K9_SW_VERSION='13.1.3';
 const CACHE=`k9-studio-${K9_SW_VERSION}`;
 
 const APP_SHELL=[
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/styles.css?v=13.1.1',
-  './js/core.js?v=13.1.1',
-  './js/periods.js?v=13.1.1',
-  './js/calculations.js?v=13.1.1',
-  './js/navigation.js?v=13.1.1',
-  './js/fast.js?v=13.1.1',
-  './config.js?v=13.1.1',
-  './js/settings.js?v=13.1.1',
-  './js/pdf-engine.js?v=13.1.1',
-  './js/operations.js?v=13.1.1',
-  './js/app.js?v=13.1.1',
+  './css/styles.css?v=13.1.3',
+  './js/core.js?v=13.1.3',
+  './js/periods.js?v=13.1.3',
+  './js/calculations.js?v=13.1.3',
+  './js/navigation.js?v=13.1.3',
+  './js/fast.js?v=13.1.3',
+  './config.js?v=13.1.3',
+  './js/settings.js?v=13.1.3',
+  './js/pdf-engine.js?v=13.1.3',
+  './js/operations.js?v=13.1.3',
+  './js/quote-form.js?v=13.1.3',
+  './js/app.js?v=13.1.3',
   './assets/logo.png',
   './assets/icon-192.png',
   './assets/icon-512.png'
