@@ -2,13 +2,12 @@
 // Tutte le schermate storiche restano raggiungibili, raggruppate per attività.
 const adminNavigation=[
  ['Home',[['dashboard','Home']]],
- ['Anagrafiche',[['customers','Clienti'],['dogs','Animali']]],
- ['Attività',[['services','Servizi'],['quotes','Preventivi'],['calendar','Calendario']]],
+ ['Clienti',[['customers','Clienti'],['dogs','Animali']]],
+ ['Lavoro',[['services','Servizi'],['quotes','Preventivi'],['calendar','Calendario']]],
  ['Economia',[['payments','Pagamenti'],['statistics','Statistiche']]],
- ['Archivio',[['documents','Documenti e ricevute']]],
- ['Gestione',[['employees','Utenti'],['profile','Pass'],['settings','Impostazioni'],['audit','Registro'],['trash','Cestino']]]
+ ['Altro',[['documents','Documenti e ricevute'],['employees','Utenti'],['profile','Pass'],['settings','Impostazioni'],['audit','Registro'],['trash','Cestino']]]
 ];
-const employeeNavigation=[['Oggi',[['dashboard','Oggi']]],['Servizi',[['services','Servizi'],['customers','Clienti assegnati'],['dogs','Animali assegnati']]],['Compensi',[['compensation','Compensi']]],['Profilo',[['profile','Pass']]]];
+const employeeNavigation=[['Oggi',[['dashboard','Oggi']]],['Lavoro',[['services','Servizi'],['calendar','Calendario'],['customers','Clienti assegnati'],['dogs','Animali assegnati']]],['Compensi',[['compensation','Compensi']]],['Profilo',[['profile','Pass']]]];
 const navigationGroups=()=>isAdmin()?adminNavigation:isEmployee()?employeeNavigation:[];
 const allowedScreen=id=>!!state.profile&&(id==='notifications'?(isAdmin()||isEmployee()):navigationGroups().some(([,pages])=>pages.some(([key])=>key===id)));
 function buildNav(id=$$('.screen:not(.hidden)')[0]?.id||'dashboard'){

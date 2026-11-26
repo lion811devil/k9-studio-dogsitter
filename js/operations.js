@@ -16,7 +16,7 @@ const opFirstPeriodStart=s=>serviceFirstDate(s)||'';
 
 function operationalMetrics(){
   const today=localDate();const weekStart=opDateKey(opStartOfWeek(new Date()));const weekEnd=opDateKey(opAddDays(opStartOfWeek(new Date()),6));
-  const activeServices=state.services.filter(opOperationalService);const maturedServices=state.services.filter(s=>s.status!=='annullato'&&opIsMatured(s)).map(serviceFinancialData);
+  const activeServices=state.services.filter(opOperationalService);
   return {
     customers:state.customers.filter(c=>c.status==='attivo').length,
     dogs:state.dogs.filter(d=>d.active!==false).length,
@@ -26,9 +26,9 @@ function operationalMetrics(){
     toVerify:activeServices.filter(s=>s.status==='da_verificare').length,
     quotesPending:state.quotes.filter(q=>['bozza','inviato'].includes(String(q.status||'').toLowerCase())&&!q.deleted_at).length,
     unread:unreadNotificationCount(),
-    toCollect:maturedServices.filter(s=>s.customer_payment_status==='da_incassare').reduce((a,s)=>a+Math.max(0,Number(s.balance_due??opServiceAmount(s))),0),
+    toCollect:economyRows().filter(isCollectibleEconomyRow).reduce((a,r)=>a+r.balance,0),
     toPay:compensationPeriodRows().filter(x=>x.payment_status==='da_liquidare').reduce((a,x)=>a+x.amount,0),
-    documents:(state.documents||[]).filter(d=>d.status==='generated'&&d.status!=='archived'&&d.is_active!==false&&!!d.storage_path).length,marginMatured:maturedServices.reduce((a,s)=>a+opServiceAmount(s)-opEmployeeAmount(s),0)
+    documents:(state.documents||[]).filter(d=>d.status==='generated'&&d.status!=='archived'&&d.is_active!==false&&!!d.storage_path).length,marginMatured:verifiedEconomics().margin
   }
 }
 
@@ -42,14 +42,10 @@ function renderOperationalDashboard(){
   <div class="operations-kpi-grid">
     ${opKpi('Servizi oggi',m.today,'services',`${m.week} questa settimana`)}
     ${opKpi('Da verificare',m.toVerify,'services','Rapporti da controllare')}
-    ${opKpi('Preventivi in attesa',m.quotesPending,'quotes','Bozze o inviati')}
-    ${opKpi('Notifiche',m.unread,'notifications','Avvisi non letti')}
+    ${opKpi('Da incassare',money(m.toCollect),'payments','Crediti operativi')}
+    ${opKpi('Da liquidare',money(m.toPay),'payments','Periodi verificati')}
   </div>
-  <div class="operations-money-grid">
-    <button class="operations-money-card" onclick="show('payments')"><span>Da incassare</span><strong>${money(m.toCollect)}</strong><small>Importi cliente maturati</small></button>
-    <button class="operations-money-card" onclick="show('payments')"><span>Da liquidare</span><strong>${money(m.toPay)}</strong><small>Compensi dipendenti</small></button>
-    <button class="operations-money-card" onclick="show('statistics')"><span>Margine maturato</span><strong>${money(m.marginMatured)}</strong><small>Importi maturati meno compensi, indipendente dai pagamenti</small></button>
-  </div>
+  <div class="card-actions k9-home-actions"><button class="primary" onclick="openQuote()">Nuovo preventivo</button><button onclick="openService()">Nuovo servizio</button><button onclick="show('quotes')">Preventivi (${m.quotesPending} in attesa)</button><button onclick="show('statistics')">Statistiche</button></div>
   <div class="operations-two-columns"><section><div class="section-title-row"><div><h3>Servizi di oggi</h3><p class="muted">${todays.reduce((a,s)=>a+visitsOnDate(s,today),0)} uscite complessive.</p></div><button onclick="show('calendar')">Apri calendario</button></div><div class="operations-agenda">${todays.map(opAgendaRow).join('')||'<div class="card empty-state"><strong>Nessun servizio oggi</strong><span>Non risultano attività programmate.</span></div>'}</div></section>
   <section><div class="section-title-row"><div><h3>Prossime attività</h3><p class="muted">I prossimi servizi pianificati.</p></div><button onclick="show('services')">Tutti i servizi</button></div><div class="operations-agenda">${upcoming.map(opAgendaRow).join('')||'<div class="card empty-state"><strong>Nessuna attività futura</strong></div>'}</div></section></div>`;
 }
@@ -63,8 +59,15 @@ function renderCalendar(){
   <div class="calendar-toolbar"><div class="calendar-nav"><button onclick="moveOperationsCalendar(-1)">‹</button><button onclick="goOperationsToday()">Oggi</button><button onclick="moveOperationsCalendar(1)">›</button></div><strong>${mode==='month'?opMonthLabel(a):mode==='week'?`${opDayLabel(opStartOfWeek(a))} – ${opDayLabel(opAddDays(opStartOfWeek(a),6))}`:a.toLocaleDateString('it-IT',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})}</strong><div class="calendar-modes"><button class="${mode==='day'?'active':''}" onclick="setOperationsCalendarMode('day')">Giorno</button><button class="${mode==='week'?'active':''}" onclick="setOperationsCalendarMode('week')">Settimana</button><button class="${mode==='month'?'active':''}" onclick="setOperationsCalendarMode('month')">Mese</button></div></div>
   ${mode==='month'?opMonthCalendar(a):mode==='week'?opWeekCalendar(a):opDayCalendar(a)}`;
 }
-function opCalendarEvent(s,date){return `<button class="calendar-event ${opStatusClass(s)}" onclick="show('services');viewService('${s.id}')" title="${esc(opServiceTitle(s))}"><span>${esc((s.service_time||'').slice(0,5)||'—')}</span><strong>${esc(dname(s.dog_id))}</strong><small>${esc(s.service_type||'Servizio')}</small></button>`}
-function opMonthCalendar(anchor){const first=new Date(anchor.getFullYear(),anchor.getMonth(),1,12),start=opStartOfWeek(first);let cells='';for(let i=0;i<42;i++){const d=opAddDays(start,i),key=opDateKey(d),same=d.getMonth()===anchor.getMonth(),events=opServicesOn(key);cells+=`<div class="calendar-day ${same?'':'outside'} ${key===localDate()?'today':''}"><div class="calendar-day-number"><span>${d.getDate()}</span>${events.length?`<b>${events.length}</b>`:''}</div><div class="calendar-day-events">${events.slice(0,3).map(s=>opCalendarEvent(s,key)).join('')}${events.length>3?`<button class="calendar-more" onclick="openCalendarDay('${key}')">+${events.length-3} altri</button>`:''}</div></div>`}return `<div class="calendar-scroll calendar-scroll-month"><div class="calendar-weekdays">${['Lun','Mar','Mer','Gio','Ven','Sab','Dom'].map(x=>`<span>${x}</span>`).join('')}</div><div class="calendar-month-grid">${cells}</div></div>`}
+function opCalendarEvent(s,date){return `<button class="calendar-event ${opStatusClass(s)}" onclick="show('services');viewService('${s.id}')" title="${esc(opServiceTitle(s))}"><span>${esc((s.service_time||'').slice(0,5)||'—')}</span><strong>${esc(cname(s.customer_id))} · ${esc(dname(s.dog_id))}</strong><small>${esc(s.service_type||'Servizio')}</small></button>`}
+function opMonthCalendar(anchor){
+  const first=new Date(anchor.getFullYear(),anchor.getMonth(),1,12),start=opStartOfWeek(first),days=new Date(anchor.getFullYear(),anchor.getMonth()+1,0).getDate(),count=Math.ceil(((first.getDay()+6)%7+days)/7)*7;
+  let cells='';for(let i=0;i<count;i++){
+    const d=opAddDays(start,i),key=opDateKey(d),same=d.getMonth()===anchor.getMonth(),events=opServicesOn(key),today=key===localDate(),label=`${d.toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}, ${events.length} ${events.length===1?'servizio':'servizi'}`;
+    cells+=`<div class="calendar-day ${same?'':'outside'} ${today?'today':''}"><button type="button" class="calendar-day-number" aria-label="${esc(label)}" ${today?'aria-current="date"':''} onclick="openCalendarDay('${key}')"><span>${d.getDate()}</span>${events.length?`<b>${events.length}</b>`:''}</button><div class="calendar-day-events">${events.slice(0,3).map(s=>opCalendarEvent(s,key)).join('')}${events.length>3?`<button class="calendar-more" onclick="openCalendarDay('${key}')">+${events.length-3} altri</button>`:''}</div></div>`;
+  }
+  return `<div class="calendar-scroll calendar-scroll-month"><div class="calendar-weekdays">${['Lun','Mar','Mer','Gio','Ven','Sab','Dom'].map(x=>`<span>${x}</span>`).join('')}</div><div class="calendar-month-grid">${cells}</div></div><p class="calendar-hint muted">Tocca un giorno per vedere tutti i servizi. Il numero nel cerchio indica i servizi previsti.</p>`;
+}
 function opWeekCalendar(anchor){const start=opStartOfWeek(anchor);return `<div class="calendar-scroll calendar-scroll-week"><div class="calendar-week-grid">${Array.from({length:7},(_,i)=>{const d=opAddDays(start,i),key=opDateKey(d),events=opServicesOn(key);return `<section class="calendar-week-day ${key===localDate()?'today':''}"><header><strong>${opDayLabel(d)}</strong><span>${events.length} servizi</span></header><div>${events.map(s=>opCalendarEvent(s,key)).join('')||'<small class="muted">Nessun servizio</small>'}</div></section>`}).join('')}</div></div>`}
 function opDayCalendar(anchor){const key=opDateKey(anchor),events=opServicesOn(key).sort((a,b)=>String(a.service_time||'').localeCompare(String(b.service_time||'')));return `<div class="calendar-day-list">${events.map(s=>`<article class="calendar-day-card ${opStatusClass(s)}"><div><span>${esc((s.service_time||'—').slice(0,5))}</span><strong>${esc(opServiceTitle(s))}</strong><small>${esc(cname(s.customer_id))} · ${visitsOnDate(s,key)} uscite</small></div><button onclick="show('services');viewService('${s.id}')">Apri</button></article>`).join('')||'<div class="card empty-state"><strong>Nessun servizio</strong><span>La giornata selezionata è libera.</span></div>'}</div>`}
 window.setOperationsCalendarMode=mode=>{operationsState.calendarMode=mode;renderCalendar()};
@@ -113,10 +116,23 @@ function proratedServiceAmount(service,from,to,kind='customer'){
   return count>0?amount*overlap/count:0;
 }
 function visitsInRange(service,from,to){return normalizePeriods(service).reduce((sum,p)=>sum+periodOverlapDays(p,from,to)*Math.max(1,Number(p.daily_visits||1)),0)}
-function statsSnapshot(from,to){
+// Maturation uses the same verified-period records as payroll. Amounts are allocated by scheduled visits within the selected range, not by payment date.
+function verifiedEconomics(from=null,to=null,serviceId=null,rows=null){
+  let revenue=0,comp=0;
+  for(const x of rows||compensationPeriodRows()){
+    if(serviceId&&x.service.id!==serviceId)continue;
+    const visits=periodVisits(x.period),allVisits=periodsTotals(normalizePeriods(x.service)).visits;
+    const overlap=from&&to?periodOverlapDays(x.period,from,to)*Math.max(1,Number(x.period.daily_visits||1)):visits;
+    if(!visits||!overlap)continue;
+    // Verified employee amount remains the authoritative source, including historical cancelled services with verified work.
+    comp+=x.amount*overlap/visits;
+    if(allVisits>0)revenue+=opServiceAmount(x.service)*overlap/allVisits;
+  }
+  return {revenue,comp,margin:revenue-comp};
+}
+function statsSnapshot(from,to,verifiedRows=compensationPeriodRows()){
   const allRows=state.services.filter(s=>recordInRange(s,from,to)),active=allRows.filter(s=>s.status!=='annullato'),matured=active.filter(opIsMatured);
-  const revenue=matured.reduce((a,s)=>a+proratedServiceAmount(s,from,to,'customer'),0),comp=matured.reduce((a,s)=>a+proratedServiceAmount(s,from,to,'employee'),0);
-  return {allRows,active,matured,services:active.length,visits:active.reduce((a,s)=>a+visitsInRange(s,from,to),0),revenue,comp,margin:revenue-comp};
+  return {allRows,active,matured,services:active.length,visits:active.reduce((a,s)=>a+visitsInRange(s,from,to),0),...verifiedEconomics(from,to,null,verifiedRows)};
 }
 function statsDelta(current,previous,{moneyValue=false}={}){
   if(previous===null||previous===undefined)return '';
@@ -135,21 +151,21 @@ function statsTrendBuckets(r){
   if(monthSpan<=36){let cursor=new Date(start.getFullYear(),start.getMonth(),1,12);while(cursor<=end){const a=new Date(cursor),b=new Date(cursor.getFullYear(),cursor.getMonth()+1,0,12),from=statsDate(a<start?start:a),to=statsDate(b>end?end:b);out.push({from,to,label:cursor.toLocaleDateString('it-IT',{month:'short',year:monthSpan>12?'2-digit':undefined})});cursor=statsAddMonths(cursor,1)}return out}
   for(let y=start.getFullYear();y<=end.getFullYear();y++){const a=new Date(y,0,1,12),b=new Date(y,11,31,12),from=statsDate(a<start?start:a),to=statsDate(b>end?end:b);out.push({from,to,label:String(y)})}return out;
 }
-function statsRankMap(rows,r,keyFn){const m=new Map();rows.forEach(s=>{const key=keyFn(s);if(!key)return;const visits=visitsInRange(s,r.from,r.to),old=m.get(key)||{services:0,visits:0,revenue:0};old.services+=1;old.visits+=visits;if(opIsMatured(s))old.revenue+=proratedServiceAmount(s,r.from,r.to,'customer');m.set(key,old)});return [...m.entries()].sort((a,b)=>b[1].visits-a[1].visits||b[1].services-a[1].services)}
+function statsRankMap(rows,r,keyFn){const m=new Map();rows.forEach(s=>{const key=keyFn(s);if(!key)return;const visits=visitsInRange(s,r.from,r.to),old=m.get(key)||{services:0,visits:0,revenue:0};old.services+=1;old.visits+=visits;old.revenue+=verifiedEconomics(r.from,r.to,s.id,r.verifiedRows).revenue;m.set(key,old)});return [...m.entries()].sort((a,b)=>b[1].visits-a[1].visits||b[1].services-a[1].services)}
 function statsRankingHtml(rows,labelFn,{showRevenue=false}={}){return rows.slice(0,6).map(([id,v])=>`<div class="statistics-ranking"><span>${esc(labelFn(id))}<small>${v.services} ${v.services===1?'servizio':'servizi'}</small></span><strong>${v.visits} uscite${showRevenue?`<small>${money(v.revenue)}</small>`:''}</strong></div>`).join('')||'<p class="muted">Nessun dato nel periodo.</p>'}
 function statsServiceTypeHtml(rows,r){const ranked=statsRankMap(rows,r,s=>String(s.service_type||'Altro').trim()||'Altro');return statsRankingHtml(ranked,id=>id,{showRevenue:true})}
-function statsEmployeeHtml(rows,r){const m=new Map();rows.forEach(s=>{const key=s.employee_id||'__none__',old=m.get(key)||{services:0,visits:0,comp:0};old.services+=1;old.visits+=visitsInRange(s,r.from,r.to);if(opIsMatured(s))old.comp+=proratedServiceAmount(s,r.from,r.to,'employee');m.set(key,old)});return [...m.entries()].sort((a,b)=>b[1].visits-a[1].visits).slice(0,8).map(([id,v])=>`<div class="statistics-ranking"><span>${esc(id==='__none__'?'Non assegnato':pname(id))}<small>${v.services} ${v.services===1?'servizio':'servizi'}</small></span><strong>${v.visits} uscite<small>${money(v.comp)} compensi</small></strong></div>`).join('')||'<p class="muted">Nessun dato nel periodo.</p>'}
+function statsEmployeeHtml(rows,r){const m=new Map();rows.forEach(s=>{const key=s.employee_id||'__none__',old=m.get(key)||{services:0,visits:0,comp:0};old.services+=1;old.visits+=visitsInRange(s,r.from,r.to);old.comp+=verifiedEconomics(r.from,r.to,s.id,r.verifiedRows).comp;m.set(key,old)});return [...m.entries()].sort((a,b)=>b[1].visits-a[1].visits).slice(0,8).map(([id,v])=>`<div class="statistics-ranking"><span>${esc(id==='__none__'?'Non assegnato':pname(id))}<small>${v.services} ${v.services===1?'servizio':'servizi'}</small></span><strong>${v.visits} uscite<small>${money(v.comp)} compensi</small></strong></div>`).join('')||'<p class="muted">Nessun dato nel periodo.</p>'}
 function statsAnimalTypeHtml(rows,r){const ranked=statsRankMap(rows,r,s=>state.dogs.find(d=>d.id===s.dog_id)?.animal_type||'Animale');return statsRankingHtml(ranked,id=>id)}
 function renderStatistics(){
   const host=$('#statisticsPanel');if(!host)return;if(!isAdmin()){host.innerHTML='<div class="card empty-state"><strong>Sezione riservata</strong></div>';return}
-  const r=statsRange(),snap=statsSnapshot(r.from,r.to),pr=statsPreviousRange(r),prev=pr?statsSnapshot(pr.from,pr.to):null;
-  const trend=statsTrendBuckets(r).map(b=>{const x=statsSnapshot(b.from,b.to);return {...b,revenue:x.revenue,services:x.services,visits:x.visits}}),maxRevenue=Math.max(0,...trend.map(x=>x.revenue));
+  const r=statsRange(),verifiedRows=compensationPeriodRows();r.verifiedRows=verifiedRows;const snap=statsSnapshot(r.from,r.to,verifiedRows),pr=statsPreviousRange(r),prev=pr?statsSnapshot(pr.from,pr.to,verifiedRows):null;
+  const trend=statsTrendBuckets(r).map(b=>{const x=statsSnapshot(b.from,b.to,verifiedRows);return {...b,revenue:x.revenue,services:x.services,visits:x.visits}}),maxRevenue=Math.max(0,...trend.map(x=>x.revenue));
   const customerRank=statsRankMap(snap.active,r,s=>s.customer_id),animalRank=statsRankMap(snap.active,r,s=>s.dog_id);
   const custom=operationsState.statisticsPeriod==='custom';
-  host.innerHTML=`<div class="page-title"><div><span class="eyebrow">ANALISI ATTIVITÀ</span><h2>Statistiche</h2><p class="muted">Andamento del lavoro, carico operativo e risultati maturati. Per incassi, acconti e residui usa Economia.</p></div><div class="statistics-period"><button class="${operationsState.statisticsPeriod==='month'?'active':''}" onclick="setStatisticsPeriod('month')">Mese</button><button class="${operationsState.statisticsPeriod==='year'?'active':''}" onclick="setStatisticsPeriod('year')">Anno</button><button class="${operationsState.statisticsPeriod==='custom'?'active':''}" onclick="setStatisticsPeriod('custom')">Intervallo</button><button class="${operationsState.statisticsPeriod==='all'?'active':''}" onclick="setStatisticsPeriod('all')">Tutto</button></div></div>
+  host.innerHTML=`<div class="page-title"><div><span class="eyebrow">ANALISI ATTIVITÀ</span><h2>Statistiche</h2><p class="muted">Andamento del lavoro, carico operativo e risultati maturati sui periodi verificati, ripartiti sulle date delle prestazioni. Per incassi, acconti e residui usa Economia. I periodi storici senza verifica non contribuiscono agli importi maturati.</p></div><div class="statistics-period"><button class="${operationsState.statisticsPeriod==='month'?'active':''}" onclick="setStatisticsPeriod('month')">Mese</button><button class="${operationsState.statisticsPeriod==='year'?'active':''}" onclick="setStatisticsPeriod('year')">Anno</button><button class="${operationsState.statisticsPeriod==='custom'?'active':''}" onclick="setStatisticsPeriod('custom')">Intervallo</button><button class="${operationsState.statisticsPeriod==='all'?'active':''}" onclick="setStatisticsPeriod('all')">Tutto</button></div></div>
   ${custom?`<div class="statistics-custom-range"><label>Dal<input type="date" id="statisticsFrom" value="${esc(r.from)}" max="${esc(r.to)}"></label><label>Al<input type="date" id="statisticsTo" value="${esc(r.to)}" min="${esc(r.from)}" max="${localDate()}"></label><button class="primary" onclick="applyStatisticsRange()">Applica</button></div>`:''}
   <div class="statistics-label">Periodo analizzato: <strong>${esc(r.label)}</strong>${pr?`<span> · confronto con ${dateIT(pr.from)} – ${dateIT(pr.to)}</span>`:''}</div>
-  <div class="operations-kpi-grid statistics-kpis">${statKpi('Servizi',snap.services,'Coinvolti nel periodo',snap.services,prev?.services)}${statKpi('Uscite',snap.visits,'Complessive',snap.visits,prev?.visits)}${statKpi('Importi maturati',money(snap.revenue),'Servizi da verificare o chiusi',snap.revenue,prev?.revenue,{moneyValue:true})}${statKpi('Margine lordo',money(snap.margin),'Importi meno compensi',snap.margin,prev?.margin,{moneyValue:true})}</div>
+  <div class="operations-kpi-grid statistics-kpis">${statKpi('Servizi',snap.services,'Coinvolti nel periodo',snap.services,prev?.services)}${statKpi('Uscite',snap.visits,'Complessive',snap.visits,prev?.visits)}${statKpi('Importi maturati',money(snap.revenue),'Solo periodi verificati',snap.revenue,prev?.revenue,{moneyValue:true})}${statKpi('Margine lordo',money(snap.margin),'Importi meno compensi',snap.margin,prev?.margin,{moneyValue:true})}</div>
   <div class="statistics-grid"><section class="statistics-panel statistics-wide"><div class="section-title-row"><div><h3>Andamento importi maturati</h3><p class="muted">Trend temporale del periodo selezionato.</p></div></div><div class="statistics-bars">${trend.map(x=>{const h=maxRevenue>0?(x.revenue/maxRevenue)*100:0;return `<div class="statistics-bar-item"><div class="statistics-bar-track" title="${esc(x.label)} · ${money(x.revenue)}"><span style="height:${h}%"></span></div><strong>${esc(x.label)}</strong><small>${money(x.revenue)}</small></div>`}).join('')||'<p class="muted">Nessun dato.</p>'}</div></section>
   <section class="statistics-panel"><h3>Stati dei servizi</h3><p class="muted">Comprende anche gli annullati per dare il quadro reale del periodo.</p>${opStatusRows(snap.allRows)}</section>
   <section class="statistics-panel"><h3>Clienti e animali più attivi</h3><h4>Clienti · per uscite</h4>${statsRankingHtml(customerRank,cname)}<h4 class="statistics-subheading">Animali · per uscite</h4>${statsRankingHtml(animalRank,dname)}</section>
