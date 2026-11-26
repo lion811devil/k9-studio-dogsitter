@@ -1,18 +1,21 @@
-// K9 Studio Dogsitter 12.9.58 — Service Worker aggiornamento affidabile
-const K9_SW_VERSION='12.9.58';
+// K9 Studio Dogsitter 13.0.0 — Service Worker aggiornamento affidabile
+const K9_SW_VERSION='13.0.0';
 const CACHE=`k9-studio-${K9_SW_VERSION}`;
 
 const APP_SHELL=[
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/styles.css?v=12.9.58',
-  './js/core.js?v=12.9.58',
-  './js/periods.js?v=12.9.58',
-  './js/settings.js?v=12.9.58',
-  './js/pdf-engine.js?v=12.9.58',
-  './js/operations.js?v=12.9.58',
-  './js/app.js?v=12.9.58',
+  './css/styles.css?v=13.0.0',
+  './js/core.js?v=13.0.0',
+  './js/periods.js?v=13.0.0',
+  './js/calculations.js?v=13.0.0',
+  './js/navigation.js?v=13.0.0',
+  './config.js?v=13.0.0',
+  './js/settings.js?v=13.0.0',
+  './js/pdf-engine.js?v=13.0.0',
+  './js/operations.js?v=13.0.0',
+  './js/app.js?v=13.0.0',
   './assets/logo.png',
   './assets/icon-192.png',
   './assets/icon-512.png'
@@ -22,7 +25,6 @@ self.addEventListener('install',event=>{
   event.waitUntil(
     caches.open(CACHE)
       .then(cache=>cache.addAll(APP_SHELL))
-      .catch(()=>null)
       .then(()=>self.skipWaiting())
   );
 });

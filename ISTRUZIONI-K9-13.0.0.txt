@@ -1,0 +1,27 @@
+K9 STUDIO DOGSITTER 13.0.0 — CONSOLIDAMENTO
+Base: repository 12.9.58, commit 5dfc78b77c995cad9b89a8430d7016b2f0f8f345.
+
+IMPORTANTE: aggiornamento da collaudare prima della pubblicazione definitiva.
+1. Conservare un backup della repository, del database Supabase e dei documenti Storage.
+2. In Supabase di prova con la stessa struttura, eseguire esclusivamente supabase/migrations/release-13.0.0-transazioni.sql (SQL Editor). Lo script crea tre RPC in una transazione, SECURITY INVOKER, senza alterare tabelle o dati esistenti. Se compare un errore non pubblicare il frontend. Non rieseguire vecchie migrazioni.
+3. Caricare i file conservando le cartelle. Non sostituire config.js, asset o migrazioni storiche.
+4. Verificare login titolare/vice/dipendente, creazione/modifica preventivo, conversione, periodi, saldo, chiusura, compensi, PDF e ricevute, archivio, notifiche e permessi. Solo dopo collaudo positivo applicare SQL e frontend in produzione, in quest'ordine.
+5. Ricaricare sito/PWA; versione 13.0.0.
+
+SOSTITUIRE (7): index.html, css/styles.css, js/app.js, js/core.js, js/periods.js, js/operations.js, sw.js.
+AGGIUNGERE (3): js/calculations.js, js/navigation.js, supabase/migrations/release-13.0.0-transazioni.sql.
+ELIMINAZIONI FACOLTATIVE: js/owner-recovery.js (solo commento, nessun riferimento rilevato), README-RELEASE-12.9.35.txt (note obsolete). Nessuna eliminazione obbligatoria. Conservare tutte le migrazioni storiche.
+
+SCELTE E LIMITI
+- Preventivo collegato autorevole per importi concordati. I servizi orari storici con importi divergenti non vengono corretti automaticamente: il salvataggio del servizio richiede coerenza con il preventivo. Controllare i casi storici prima di modificare importi già incassati. Nessun ricalcolo di massa.
+- Menu 6+4, sottosezioni, avvisi nell'intestazione, collegamento al preventivo e documenti a scomparsa. Tutte le schermate originarie conservate.
+- Calcoli condivisi, ripartizione per prestazioni, compensi ogni 30 minuti, date, saldo prima della ricevuta, riutilizzo PDF archiviati in ZIP, rimozione vecchio renderer non referenziato.
+- Nuove RPC per salvataggio preventivo/voci, servizio/collegamento e saldo/chiusura facoltativa. Senza installazione SQL le relative operazioni non funzionano.
+- Richieste archivio in parallelo, refresh sessione condiviso, meno ricaricamenti nel pagamento. Non completata la riscrittura generale di loadAll, caricamento lazy librerie o di tutte le RLS/RPC storiche.
+- Nessun intervento su database reale, Edge Function o configurazione live.
+
+TEST LOCALI
+Node --check positivo per tutti i JS e SW. Chromium 390x844, HTML/CSS/JS caricati direttamente, dati e dipendenze esterne simulati: 15 schermate amministrative, 7 dipendente, 4 modali, 8 verifiche calcoli/date positive. Nessun errore JS rilevato in queste prove. Nessun overflow orizzontale nella schermata servizi verificata. Verificato blocco navigazione amministrativa nell'area dipendente.
+Non collaudati SQL su PostgreSQL reale, login reale, RLS, Storage, PDF effettivi, consegna notifiche e service worker via rete. La struttura DB effettiva va verificata.
+
+ROLLBACK: ripristinare i file originali dal backup GitHub. Le nuove RPC non sono chiamate dalla versione precedente e non modificano i dati al momento dell'installazione. Non sovrascrivere dati recenti con un backup DB senza analizzarli.
