@@ -383,3 +383,49 @@ main{width:100%}
 .service-extra>summary{cursor:pointer;font-weight:700;color:var(--p)}
 .service-linked-quote{margin:.6rem 0}
 @media(max-width:700px){#nav{justify-content:flex-start}#nav button{flex:0 0 auto;max-width:none;font-size:.82rem;padding:.5rem .6rem}#app>header .brand>div{min-width:0}#app>header .header-actions button{padding:.45rem;font-size:.78rem}.subnav{margin:0;padding:.35rem .5rem}}
+
+/* 13.1 – compact actions and progressive lists */
+.k9-list-tools{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin:8px 0 14px}.k9-list-tools label{flex:1 1 180px;min-width:0}.k9-list-tools small{align-self:center;color:var(--muted,#52616b)}.k9-list-tools button{flex:0 0 auto}.k9-list-tools button[hidden]{display:none!important}.k9-home-actions{margin:12px 0 20px;display:flex;gap:8px;flex-wrap:wrap}.k9-home-actions button{flex:1 1 140px}.quote-form-grid>.data-form-section{grid-column:1/-1}.quote-form-grid>.data-form-section>.form-grid{padding:12px}.k9-list-tools input{width:100%;min-width:0}
+.k9-secondary-actions{flex:1 1 100%;padding:8px 0}.k9-secondary-actions>summary{cursor:pointer;font-weight:650;color:var(--primary,#0f5f53);padding:5px 0}.k9-secondary-actions[open]>summary{margin-bottom:8px}.k9-secondary-actions .card-actions{display:flex;flex-wrap:wrap;gap:8px}
+
+/* 13.1.1 — calendario adattivo e lettura notifiche */
+#notifications .section-head .card-actions{flex-wrap:wrap;max-width:100%;gap:6px}
+#markAllNotificationsButton:disabled{opacity:.65;cursor:wait}
+#calendarPanel .page-title{margin-bottom:6px}
+#calendarPanel .calendar-toolbar{margin:8px 0 12px;padding:8px;gap:8px}
+#calendarPanel .calendar-toolbar button{padding:.45rem .65rem;min-height:38px}
+.calendar-scroll-month .calendar-weekdays,.calendar-scroll-month .calendar-month-grid{width:100%;min-width:0;max-width:100%;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.calendar-scroll-month .calendar-day{min-height:94px;padding:4px;border-radius:9px;min-width:0}
+.calendar-day-number{width:100%;display:flex;align-items:center;justify-content:space-between;gap:2px;padding:3px;border:0;background:transparent;color:inherit;min-height:30px;margin:0 0 4px;box-shadow:none;text-align:left}
+.calendar-day-number:focus-visible{outline:2px solid var(--p);outline-offset:-2px}
+.calendar-day-number b{flex-shrink:0;min-width:19px;height:19px;padding:0 3px}
+.calendar-day-events,.calendar-event{min-width:0}
+.calendar-event{grid-template-columns:minmax(0,1fr);gap:2px;padding:4px}
+.calendar-event span{grid-row:auto}
+.calendar-week-day{min-height:105px;padding:8px;min-width:0}
+.calendar-scroll-week .calendar-week-grid{width:100%;min-width:0;max-width:100%;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.calendar-day-card{gap:8px;padding:10px}
+.calendar-hint{font-size:.8rem;margin:6px 0 0}
+@media(max-width:900px){
+  .calendar-scroll-month .calendar-day{min-height:0;padding:0;opacity:1;overflow:hidden}
+  .calendar-scroll-month .calendar-day.outside{color:#68737b;background:#f1f3f4}
+  .calendar-scroll-month .calendar-day-number{flex-direction:column;justify-content:center;gap:3px;min-height:54px;height:100%;margin:0;padding:3px 0;font-size:.86rem;border-radius:8px}
+  .calendar-scroll-month .calendar-day-events{display:none}
+  .calendar-scroll-week .calendar-week-grid{grid-template-columns:minmax(0,1fr);gap:6px}
+  .calendar-week-day{min-height:0}
+  .calendar-week-day header{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;padding-bottom:5px}
+  .calendar-event{grid-template-columns:44px minmax(0,1fr);padding:7px}
+  .calendar-event span{grid-row:1/3}
+}
+@media(max-width:650px){
+  #calendarPanel .calendar-toolbar{grid-template-columns:1fr;gap:6px;padding:6px}
+  #calendarPanel .calendar-toolbar button{padding:.35rem .25rem;font-size:.82rem;min-height:36px}
+  .calendar-scroll-month .calendar-weekdays{font-size:.69rem}
+  .calendar-day-card{flex-direction:row;align-items:center}
+  .calendar-day-card>div{flex:1;grid-template-columns:42px minmax(0,1fr);gap:3px 5px}
+  .calendar-day-card>button{width:auto;flex-shrink:0;padding:.45rem .55rem}
+  .calendar-day-card strong{font-size:.88rem}
+  .calendar-day-card small{font-size:.76rem}
+  #notifications .section-head .card-actions{width:100%}
+  #markAllNotificationsButton{flex:1 1 100%}
+}
