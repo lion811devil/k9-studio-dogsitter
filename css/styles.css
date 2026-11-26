@@ -370,3 +370,16 @@ main{width:100%}
   .modal-head{top:-.8rem;padding:.8rem 0 .55rem}
   .modal-actions{bottom:-.8rem;padding:.65rem 0 .8rem}
 }
+
+/* 13.0 — navigazione compatta, accessibile e uniforme */
+#app>header .header-actions{display:flex;align-items:center;gap:.35rem;flex-shrink:0}
+#app>header .header-actions button{min-height:40px;padding:.5rem .65rem;white-space:nowrap;font-size:.85rem}
+#nav{justify-content:center;scroll-snap-type:none;gap:.35rem}
+#nav button{flex:1 0 auto;max-width:180px;font-size:.9rem;font-weight:700;padding:.55rem .75rem;min-height:42px}
+.subnav{display:flex;gap:.4rem;overflow-x:auto;padding:.45rem .65rem;max-width:1180px;margin:auto;border-bottom:1px solid var(--line);background:var(--card)}
+.subnav button{white-space:nowrap;min-height:40px;padding:.4rem .75rem;font-size:.9rem}
+.subnav button.active,#notificationShortcut.active{background:color-mix(in srgb,var(--p) 14%,white);color:var(--p);border-color:var(--p);font-weight:700}
+.service-extra{margin:.6rem 0;border:1px solid var(--line);border-radius:12px;padding:.65rem}
+.service-extra>summary{cursor:pointer;font-weight:700;color:var(--p)}
+.service-linked-quote{margin:.6rem 0}
+@media(max-width:700px){#nav{justify-content:flex-start}#nav button{flex:0 0 auto;max-width:none;font-size:.82rem;padding:.5rem .6rem}#app>header .brand>div{min-width:0}#app>header .header-actions button{padding:.45rem;font-size:.78rem}.subnav{margin:0;padding:.35rem .5rem}}
